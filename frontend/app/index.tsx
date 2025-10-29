@@ -3,11 +3,13 @@ import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import apiClient from "@/api/client";
 import { useAuthStore, type AuthState, type AuthUser } from "../store/auth";
+import type { ProfileStatusResponse } from "@/types/api";
 
 const Index = () => {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const setUser = useAuthStore((state: AuthState) => state.setUser);
+  const setProfileStatus = useAuthStore((state: AuthState) => (state as any).setProfileStatus);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -16,13 +18,24 @@ const Index = () => {
         if (response.data) {
           setUser(response.data as AuthUser);
         }
+        // Fetch profile status after user
+        try {
+          const profileRes = await apiClient.get<ProfileStatusResponse>("/api/user/profile-status");
+          if (profileRes?.data?.success) {
+            setProfileStatus(profileRes.data);
+            if (!profileRes.data.hasProfile) {
+              router.replace("/auth/InitialProfile");
+              return;
+            }
+          }
+        } catch {}
         setLoading(false);
       } catch {
         router.replace("/auth/Auth");
       }
     };
     checkAuth();
-  }, [router, setUser]);
+  }, [router, setUser, setProfileStatus]);
 
   if (loading) {
     return (

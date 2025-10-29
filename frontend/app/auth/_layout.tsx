@@ -5,6 +5,7 @@ export default function AuthLayout() {
     <Stack>
       <Stack.Screen name="Auth" options={{ headerShown: false }} />
       <Stack.Screen name="Otp" options={{ headerShown: false }} />
+      <Stack.Screen name="InitialProfile" options={{ headerShown: false }} />
     </Stack>
   );
 }

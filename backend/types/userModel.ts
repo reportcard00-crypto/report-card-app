@@ -1,5 +1,6 @@
 import type mongoose from "mongoose";
 import type ROLES from "./roles";
+export type Role = (typeof ROLES)[keyof typeof ROLES];
 
 export type UserModel = {
     _id: mongoose.Types.ObjectId;
@@ -8,7 +9,7 @@ export type UserModel = {
     otp?: string;
     otpExpiry?: Date;
     isPhoneVerified: boolean;
-    role?: typeof ROLES;
+    role?: Role;
     userProfile?: mongoose.Types.ObjectId;
     teacherProfile?: mongoose.Types.ObjectId;
 }
