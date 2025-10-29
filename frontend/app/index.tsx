@@ -1,11 +1,68 @@
-import { View, Text } from "react-native";
+import React, { useEffect, useState } from "react";
+import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
+import apiClient from "@/api/client";
+import { useAuthStore, type AuthState, type AuthUser } from "../store/auth";
 
 const Index = () => {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const setUser = useAuthStore((state: AuthState) => state.setUser);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await apiClient.get("/api/user/user");
+        if (response.data) {
+          setUser(response.data as AuthUser);
+        }
+        setLoading(false);
+      } catch {
+        router.replace("/auth/Auth");
+      }
+    };
+    checkAuth();
+  }, [router, setUser]);
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2563eb" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
   return (
-    <View>
-      <Text>Hello World</Text>
+    <View style={styles.container}>
+      <Text style={styles.welcome}>Welcome</Text>
     </View>
   );
 };
 
 export default Index;
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#6b7280",
+    fontSize: 16,
+  },
+  container: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
+  welcome: {
+    fontSize: 24,
+    fontWeight: "600",
+    color: "#111827",
+  },
+});
