@@ -3,6 +3,7 @@ import jwt, { type JwtPayload } from "jsonwebtoken";
 import User from "../models/userModel";
 import type { CustomRequest } from "../types/index";
 import type { UserModel } from "../types/userModel";
+import ROLES from "../types/roles";
 
 export async function isAuthenticated(
   req: CustomRequest,
@@ -61,4 +62,17 @@ export async function isAuthenticated(
     res.status(500).json({ success: false, message: "Internal server error" });
     return;
   }
+}
+
+export function isAdmin(req: CustomRequest, res: Response, next: NextFunction) {
+  const user = req.user as unknown as UserModel | undefined;
+  if (!user) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
+    return;
+  }
+  if (user.role !== ROLES.ADMIN) {
+    res.status(403).json({ success: false, message: "Admin access required" });
+    return;
+  }
+  next();
 }

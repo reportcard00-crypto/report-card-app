@@ -24,7 +24,11 @@ const Index = () => {
           if (profileRes?.data?.success) {
             setProfileStatus(profileRes.data);
             if (!profileRes.data.hasProfile) {
-              router.replace("/auth/InitialProfile");
+              if (profileRes.data.profileType === "teacher") {
+                router.replace("/auth/TeacherProfile");
+              } else {
+                router.replace("/auth/InitialProfile");
+              }
               return;
             }
           }

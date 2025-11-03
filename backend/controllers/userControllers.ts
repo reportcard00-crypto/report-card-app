@@ -230,6 +230,101 @@ export const completeUserProfile = async (req: CustomRequest, res: Response) => 
   }
 }
 
+export const completeTeacherProfile = async (req: CustomRequest, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ success: false, message: "User not found" });
+      return;
+    }
+
+    if (user.role !== ROLES.TEACHER) {
+      res.status(400).json({ success: false, message: "Only teachers can complete this profile" });
+      return;
+    }
+
+    const {
+      name: rawName,
+      subject,
+      experience,
+      school,
+      bio,
+    } = req.body as Record<string, any>;
+
+    // Determine name with fallbacks (copy from existing user or userProfile if not provided)
+    let name: string | undefined = typeof rawName === "string" ? rawName : undefined;
+    if (!name || String(name).trim().length === 0) {
+      if (user.name && String(user.name).trim().length > 0) {
+        name = user.name as string;
+      } else if (user.userProfile) {
+        const existingUserProfile = await UserProfile.findById(user.userProfile);
+        if (existingUserProfile?.name) {
+          name = existingUserProfile.name;
+        }
+      }
+    }
+
+    const missing = [
+      ["subject", subject],
+      ["experience", experience],
+      ["school", school],
+      ["bio", bio],
+    ]
+      .filter(([, v]) => v === undefined || v === null || String(v).trim?.().length === 0)
+      .map(([k]) => k as string);
+
+    if (!name || String(name).trim().length === 0) {
+      missing.unshift("name");
+    }
+
+    if (missing.length > 0) {
+      res.status(400).json({ success: false, message: `Missing fields: ${missing.join(", ")}` });
+      return;
+    }
+
+    // Create or update the teacher profile
+    let profileDoc;
+    const payload = {
+      name: String(name),
+      subject: String(subject).trim(),
+      experience: Number(experience),
+      school: String(school).trim(),
+      bio: String(bio).trim(),
+      updatedAt: new Date(),
+    } as const;
+
+    if (user.teacherProfile) {
+      profileDoc = await TeacherProfile.findByIdAndUpdate(user.teacherProfile, payload, { new: true });
+    } else {
+      profileDoc = await TeacherProfile.create({ ...payload });
+      user.teacherProfile = profileDoc._id as any;
+    }
+
+    if (!profileDoc) {
+      res.status(404).json({ success: false, message: "Profile not found" });
+      return;
+    }
+
+    // sync name on user if available
+    user.name = payload.name;
+    await (user as any).save();
+
+    res.status(200).json({
+      success: true,
+      message: "Teacher profile saved successfully",
+      profileSummary: {
+        name: profileDoc.name,
+        subject: profileDoc.subject,
+        experience: profileDoc.experience,
+        isApproved: profileDoc.isApproved,
+      },
+    });
+  } catch (error) {
+    console.error("Error completing teacher profile:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 export const getUser = async (req: CustomRequest, res: Response): Promise<void> => {
   try {
     const user = req.user;

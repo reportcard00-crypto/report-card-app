@@ -19,8 +19,9 @@ const teacherProfileSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   subject: { type: String, required: true },
   experience: { type: Number, required: true },
+  school: { type: String, required: true },
   bio: { type: String, required: true },
-  profilePicture: { type: String, required: true },
+  profilePicture: { type: String, required: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
