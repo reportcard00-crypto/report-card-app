@@ -25,4 +25,18 @@ export async function updateUserRole(userId: string, role: "user" | "teacher" | 
   return resp.data;
 }
 
+export async function uploadQuestionPdf(params: { file: any; startPage: number; numPages: number }) {
+  const form = new FormData();
+  form.append("startPage", String(params.startPage));
+  form.append("numPages", String(params.numPages));
+  form.append("pdf", params.file);
+
+  const resp = await apiClient.post(`/api/admin/question-pdfs/upload`, form, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
+  return resp.data as any;
+}
+
 

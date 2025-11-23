@@ -1,11 +1,199 @@
-import { View, Text } from "react-native";
+import React, { useMemo, useState } from "react";
+import { View, Text, TextInput, Button, Platform, ScrollView } from "react-native";
+import { uploadQuestionPdf } from "@/api/admin";
 
 const QuestionDB = () => {
+  const [file, setFile] = useState<any | null>(null);
+  const [startPage, setStartPage] = useState<string>("1");
+  const [numPages, setNumPages] = useState<string>("1");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<any | null>(null);
+  const [copiedFor, setCopiedFor] = useState<string | null>(null);
+
+  const canSubmit = useMemo(() => {
+    const sp = parseInt(startPage || "1", 10);
+    const np = parseInt(numPages || "1", 10);
+    return !!file && Number.isFinite(sp) && sp > 0 && Number.isFinite(np) && np > 0;
+  }, [file, startPage, numPages]);
+
+  const stringifyResultHidingBase64 = (data: any) => {
+    try {
+      const replacer = (key: string, value: any) => {
+        if (key === "image" && typeof value === "string" && value.startsWith("data:image/")) {
+          return "[base64 hidden — use Copy button]";
+        }
+        return value;
+      };
+      return JSON.stringify(data, replacer, 2);
+    } catch {
+      return String(data);
+    }
+  };
+
+  const extractBase64 = (dataUrl: string) => {
+    const commaIndex = dataUrl.indexOf(",");
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  };
+
+  const copyText = async (text: string, id: string) => {
+    try {
+      if (Platform.OS === "web" && typeof navigator !== "undefined" && (navigator as any).clipboard?.writeText) {
+        await (navigator as any).clipboard.writeText(text);
+      } else {
+        // Fallback: create a temporary textarea (web) or simply no-op on native
+        if (Platform.OS === "web") {
+          const el = document.createElement("textarea");
+          el.value = text;
+          el.setAttribute("readonly", "");
+          el.style.position = "absolute";
+          el.style.left = "-9999px";
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand("copy");
+          document.body.removeChild(el);
+        }
+      }
+      setCopiedFor(id);
+      setTimeout(() => setCopiedFor((prev) => (prev === id ? null : prev)), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const sp = Math.max(parseInt(startPage || "1", 10) || 1, 1);
+      const np = Math.max(parseInt(numPages || "1", 10) || 1, 1);
+      const resp = await uploadQuestionPdf({ file: file as any, startPage: sp, numPages: np });
+      setResult(resp);
+    } catch (e: any) {
+      setResult({ error: e?.response?.data || e?.message || "Upload failed" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
-    <View>
-      <Text>Question DB</Text>
-    </View>
-  )
+    <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <Text style={{ fontSize: 18, fontWeight: "600" }}>Question DB</Text>
+
+      <View style={{ gap: 8 }}>
+        <Text style={{ fontWeight: "500" }}>Upload PDF</Text>
+        {Platform.OS === "web" ? (
+          // Render a native input for web
+          // @ts-ignore - React Native Web supports DOM elements on web
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e: any) => {
+              const f = e?.target?.files?.[0];
+              if (f && f.type === "application/pdf") {
+                setFile(f);
+              } else {
+                setFile(null);
+              }
+            }}
+          />
+        ) : (
+          <View>
+            <Text style={{ color: "#666" }}>
+              File picker not set up on native. Install expo-document-picker to enable.
+            </Text>
+          </View>
+        )}
+        <Text style={{ color: file ? "green" : "#888" }}>
+          {file ? `Selected: ${file.name || file.uri || "PDF file"}` : "No file selected"}
+        </Text>
+      </View>
+
+      <View style={{ gap: 8 }}>
+        <Text style={{ fontWeight: "500" }}>Start Page</Text>
+        <TextInput
+          value={startPage}
+          onChangeText={setStartPage}
+          inputMode="numeric"
+          keyboardType="number-pad"
+          placeholder="e.g. 3"
+          style={{
+            borderWidth: 1,
+            borderColor: "#ccc",
+            borderRadius: 6,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+      </View>
+
+      <View style={{ gap: 8 }}>
+        <Text style={{ fontWeight: "500" }}>Number of Pages</Text>
+        <TextInput
+          value={numPages}
+          onChangeText={setNumPages}
+          inputMode="numeric"
+          keyboardType="number-pad"
+          placeholder="e.g. 2"
+          style={{
+            borderWidth: 1,
+            borderColor: "#ccc",
+            borderRadius: 6,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+          }}
+        />
+      </View>
+
+      <Button title={submitting ? "Uploading..." : "Send to Backend"} onPress={handleSubmit} disabled={!canSubmit || submitting} />
+
+      {result ? (
+        <View style={{ marginTop: 12, gap: 8 }}>
+          <Text style={{ fontWeight: "600" }}>Result</Text>
+          {/* Quick actions for any images present */}
+          {Array.isArray(result?.data) && result.data.some((d: any) => !!d?.image) ? (
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: "#555" }}>Images detected. Copy base64 without displaying:</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {result.data.map((item: any, idx: number) => {
+                  if (!item?.image || typeof item.image !== "string") return null;
+                  const id = `img-${idx}`;
+                  return (
+                    <View key={id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <Button
+                        title={copiedFor === id ? "Copied!" : `Copy base64 (Q${idx + 1})`}
+                        onPress={() => copyText(extractBase64(item.image), id)}
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+          <ScrollView
+            style={{
+              maxHeight: 320,
+              borderWidth: 1,
+              borderColor: "#ddd",
+              borderRadius: 6,
+              backgroundColor: "#fafafa",
+            }}
+            contentContainerStyle={{ padding: 8 }}
+          >
+            <Text
+              selectable
+              style={{
+                color: result?.error ? "red" : "#333",
+                fontFamily: Platform.OS === "web" ? "monospace" : undefined,
+              }}
+            >
+              {typeof result === "string" ? result : stringifyResultHidingBase64(result)}
+            </Text>
+          </ScrollView>
+        </View>
+      ) : null}
+    </ScrollView>
+  );
 }
 
 export default QuestionDB;
