@@ -1,20 +1,32 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, TextInput, Button, Platform, ScrollView } from "react-native";
-import { uploadQuestionPdf } from "@/api/admin";
+import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator } from "react-native";
+import { uploadPdfDirect, processQuestionPdf } from "@/api/admin";
 
 const QuestionDB = () => {
   const [file, setFile] = useState<any | null>(null);
   const [startPage, setStartPage] = useState<string>("1");
   const [numPages, setNumPages] = useState<string>("1");
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedPublicUrl, setUploadedPublicUrl] = useState<string | null>(null);
   const [result, setResult] = useState<any | null>(null);
   const [copiedFor, setCopiedFor] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => {
     const sp = parseInt(startPage || "1", 10);
     const np = parseInt(numPages || "1", 10);
-    return !!file && Number.isFinite(sp) && sp > 0 && Number.isFinite(np) && np > 0;
-  }, [file, startPage, numPages]);
+    // Allow send only when an upload has completed and pages are valid
+    return !!uploadedPublicUrl && Number.isFinite(sp) && sp > 0 && Number.isFinite(np) && np > 0;
+  }, [uploadedPublicUrl, startPage, numPages]);
+
+  const fileToDataUrl = (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
 
   const stringifyResultHidingBase64 = (data: any) => {
     try {
@@ -60,21 +72,7 @@ const QuestionDB = () => {
     }
   };
 
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setResult(null);
-    try {
-      const sp = Math.max(parseInt(startPage || "1", 10) || 1, 1);
-      const np = Math.max(parseInt(numPages || "1", 10) || 1, 1);
-      const resp = await uploadQuestionPdf({ file: file as any, startPage: sp, numPages: np });
-      setResult(resp);
-    } catch (e: any) {
-      setResult({ error: e?.response?.data || e?.message || "Upload failed" });
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  // no-op handler retained for possible future native picker integration
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
@@ -91,9 +89,30 @@ const QuestionDB = () => {
             onChange={(e: any) => {
               const f = e?.target?.files?.[0];
               if (f && f.type === "application/pdf") {
-                setFile(f);
+                (async () => {
+                  setFile(f);
+                  setResult(null);
+                  setUploadedPublicUrl(null);
+                  setUploading(true);
+                  try {
+                    const dataUrl = await fileToDataUrl(f);
+                    const { publicUrl } = await uploadPdfDirect({
+                      dataBase64: dataUrl,
+                      fileType: f.type || "application/pdf",
+                      fileName: f.name || "question.pdf",
+                      isPermanent: true,
+                    });
+                    setUploadedPublicUrl(publicUrl);
+                  } catch {
+                    setUploadedPublicUrl(null);
+                    setResult({ error: "Upload failed" });
+                  } finally {
+                    setUploading(false);
+                  }
+                })();
               } else {
                 setFile(null);
+                setUploadedPublicUrl(null);
               }
             }}
           />
@@ -107,6 +126,11 @@ const QuestionDB = () => {
         <Text style={{ color: file ? "green" : "#888" }}>
           {file ? `Selected: ${file.name || file.uri || "PDF file"}` : "No file selected"}
         </Text>
+        {uploadedPublicUrl ? (
+          <Text style={{ color: "#0a7", fontSize: 12 }}>Uploaded to storage. Ready to process.</Text>
+        ) : uploading ? (
+          <Text style={{ color: "#666", fontSize: 12 }}>Uploading to storage…</Text>
+        ) : null}
       </View>
 
       <View style={{ gap: 8 }}>
@@ -145,7 +169,39 @@ const QuestionDB = () => {
         />
       </View>
 
-      <Button title={submitting ? "Uploading..." : "Send to Backend"} onPress={handleSubmit} disabled={!canSubmit || submitting} />
+      <View style={{ gap: 8 }}>
+        <Button
+          title={submitting ? "Processing..." : "Send to Backend"}
+          onPress={async () => {
+            if (!canSubmit || !uploadedPublicUrl) return;
+            setSubmitting(true);
+            setResult(null);
+            try {
+              const sp = Math.max(parseInt(startPage || "1", 10) || 1, 1);
+              const np = Math.max(parseInt(numPages || "1", 10) || 1, 1);
+              const resp = await processQuestionPdf({ pdfUrl: uploadedPublicUrl, startPage: sp, numPages: np });
+              setResult(resp);
+            } catch (e: any) {
+              setResult({ error: e?.response?.data || e?.message || "Processing failed" });
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          disabled={!canSubmit || submitting || uploading}
+        />
+        {uploading ? (
+          <View style={{ marginTop: 8, alignItems: "center" }}>
+            <ActivityIndicator />
+            <Text style={{ marginTop: 6, color: "#666" }}>Uploading to storage…</Text>
+          </View>
+        ) : null}
+        {submitting ? (
+          <View style={{ marginTop: 8, alignItems: "center" }}>
+            <ActivityIndicator />
+            <Text style={{ marginTop: 6, color: "#666" }}>Processing PDF…</Text>
+          </View>
+        ) : null}
+      </View>
 
       {result ? (
         <View style={{ marginTop: 12, gap: 8 }}>

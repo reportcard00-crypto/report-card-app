@@ -5,6 +5,7 @@ import userRouter from "./routes/userRoutes";
 import adminRouter from "./routes/adminRoutes";
 import cors from "cors";
 import { Path2D as CanvasPath2D, DOMMatrix as CanvasDOMMatrix, Image as CanvasImage, ImageData as CanvasImageData } from "@napi-rs/canvas";
+import fileRoutes from "./routes/fileRoutes";
 
 // Ensure pdfjs-dist has required canvas-like globals in Node
 // @ts-ignore
@@ -28,6 +29,7 @@ app.use(cors({
 }));
 app.use("/api/user", userRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/file", fileRoutes);
 
 app.listen(3000, () => {
   console.log("Server is running on port 3000");

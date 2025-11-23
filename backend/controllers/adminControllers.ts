@@ -4,6 +4,8 @@ import ROLES from "../types/roles";
 import axios from "axios";
 import { createCanvas } from "@napi-rs/canvas";
 import { getDocument } from "pdfjs-dist";
+import type { CustomRequest } from "../types";
+import { uploadBufferToR2 } from "../utils/fileupload";
 
 export const listUsers = async (req: Request, res: Response) => {
   try {
@@ -79,16 +81,16 @@ export const updateUserRole = async (req: Request, res: Response) => {
   }
 };
 
-export const uploadQuestionPdf = async (req: Request, res: Response) => {
+export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
   try {
-    const file = (req as any).file as Express.Multer.File | undefined;
-    const { startPage, numPages } = (req.body || {}) as {
+    const { fileUrl, startPage, numPages } = (req.body || {}) as {
+      fileUrl?: string;
       startPage?: string | number;
       numPages?: string | number;
     };
 
-    if (!file) {
-      res.status(400).json({ success: false, message: "PDF file is required" });
+    if (!fileUrl || typeof fileUrl !== "string") {
+      res.status(400).json({ success: false, message: "fileUrl is required" });
       return;
     }
 
@@ -101,13 +103,10 @@ export const uploadQuestionPdf = async (req: Request, res: Response) => {
       return;
     }
 
-    // Render requested PDF pages to PNG base64 strings
-    const pdfPath = file.path;
-    const loadingTask = getDocument({
-      url: pdfPath,
-      disableFontFace: true,
-      isEvalSupported: false,
-    });
+    // Download the PDF from R2 and load via pdfjs
+    const pdfResp = await axios.get<ArrayBuffer>(fileUrl, { responseType: "arraybuffer" });
+    const pdfData = new Uint8Array(pdfResp.data as any);
+    const loadingTask = getDocument({ data: pdfData, disableFontFace: true, isEvalSupported: false });
     const pdf = await loadingTask.promise;
     const totalPages = pdf.numPages;
 
@@ -127,6 +126,10 @@ export const uploadQuestionPdf = async (req: Request, res: Response) => {
     // Keep previous page context to handle cross-page (split) questions
     let previousPageDataUrl: string | null = null;
     let previousPageExtraction: any[] = [];
+
+    const currentUser = req.user;
+    const userId = String(currentUser?._id || "");
+    const role = String(currentUser?.role || "");
 
     for (let pageNum = start; pageNum <= end; pageNum++) {
       const page = await pdf.getPage(pageNum);
@@ -222,7 +225,7 @@ export const uploadQuestionPdf = async (req: Request, res: Response) => {
 
       for (const item of extracted) {
         // If model returned a diagram box, crop the rendered page to that region
-        let diagramDataUrl: string | null = null;
+        let diagramUrl: string | null = null;
         if (item?.hasDiagram && item?.diagramBox && typeof item.diagramBox === "object") {
           const rel = item.diagramBox || {};
           const cw = canvas.width;
@@ -250,14 +253,28 @@ export const uploadQuestionPdf = async (req: Request, res: Response) => {
             // @ts-ignore
             cropCtx.drawImage(canvas as any, sx, sy, sw, sh, 0, 0, sw, sh);
             const cropBuffer = crop.toBuffer("image/png");
-            diagramDataUrl = `data:image/png;base64,${cropBuffer.toString("base64")}`;
+            // Upload cropped diagram to R2 and store its public URL
+            try {
+              const uploaded = await uploadBufferToR2(
+                cropBuffer,
+                "image/png",
+                `diagram_page_${pageNum}.png`,
+                role,
+                userId,
+                true
+              );
+              diagramUrl = uploaded.publicUrl;
+            } catch (e) {
+              console.error("Failed to upload diagram image to R2", e);
+              diagramUrl = null;
+            }
           }
         }
         const q: ExtractedQuestion = {
           question: String(item?.question || "").trim(),
           options: Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [],
           correctOption: item?.correctOption ? String(item.correctOption) : undefined,
-          image: item?.hasDiagram ? diagramDataUrl : null,
+          image: item?.hasDiagram ? diagramUrl : null,
           page: pageNum,
         };
         if (q.question && q.options.length > 0 && !seenQuestions.has(q.question)) {

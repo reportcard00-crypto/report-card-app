@@ -14,6 +14,9 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.937.0",
+    "@aws-sdk/s3-request-presigner": "^3.937.0",
+    "@napi-rs/canvas": "^0.1.54",
     "@types/axios": "^0.14.4",
     "@types/cors": "^2.8.19",
     "@types/dotenv": "^8.2.3",
@@ -22,14 +25,14 @@
     "@types/mongoose": "^5.11.97",
     "@types/multer": "^1.4.12",
     "axios": "^1.13.1",
-    "@napi-rs/canvas": "^0.1.54",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
-    "pdfjs-dist": "^4.8.69",
-    "multer": "^1.4.5-lts.1",
     "mongoose": "^8.19.2",
+    "multer": "^1.4.5-lts.1",
+    "pdfjs-dist": "^4.8.69",
+    "uuid": "^13.0.0",
     "zod": "^4.1.12"
   }
 }

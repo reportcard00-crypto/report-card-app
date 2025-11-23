@@ -25,16 +25,36 @@ export async function updateUserRole(userId: string, role: "user" | "teacher" | 
   return resp.data;
 }
 
-export async function uploadQuestionPdf(params: { file: any; startPage: number; numPages: number }) {
-  const form = new FormData();
-  form.append("startPage", String(params.startPage));
-  form.append("numPages", String(params.numPages));
-  form.append("pdf", params.file);
+// 1) Ask backend for a presigned slot to upload a PDF to R2
+export async function getQuestionPdfUploadSlot(options?: { fileType?: string; fileName?: string; isPermanent?: boolean }) {
+  const fileType = options?.fileType ?? "application/pdf";
+  const fileName = options?.fileName ?? "question.pdf";
+  const isPermanent = options?.isPermanent ?? true;
+  const resp = await apiClient.post<{ uploadUrl: string; publicUrl: string }>("/api/file/upload", {
+    fileType,
+    fileName,
+    isPermanent,
+  });
+  return resp.data;
+}
 
-  const resp = await apiClient.post(`/api/admin/question-pdfs/upload`, form, {
-    headers: {
-      "Content-Type": "multipart/form-data",
-    },
+// 2) Server-side upload to R2 to avoid CORS (accepts base64 string)
+export async function uploadPdfDirect(params: { dataBase64: string; fileType?: string; fileName?: string; isPermanent?: boolean }) {
+  const resp = await apiClient.post<{ publicUrl: string }>("/api/file/upload-direct", {
+    fileType: params.fileType ?? "application/pdf",
+    fileName: params.fileName ?? "question.pdf",
+    dataBase64: params.dataBase64,
+    isPermanent: params.isPermanent ?? true,
+  });
+  return resp.data;
+}
+
+// 3) Tell backend to process the already-uploaded PDF by its public URL
+export async function processQuestionPdf(params: { pdfUrl: string; startPage: number; numPages: number }) {
+  const resp = await apiClient.post(`/api/admin/question-pdfs/process`, {
+    startPage: params.startPage,
+    numPages: params.numPages,
+    fileUrl: params.pdfUrl,
   });
   return resp.data as any;
 }
