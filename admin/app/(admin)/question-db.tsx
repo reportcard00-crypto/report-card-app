@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator } from "react-native";
 import { uploadPdfDirect, processQuestionPdf } from "@/api/admin";
+import { useQuestionEditorStore, type QuestionEditorState, SUBJECTS } from "@/store/questionEditor";
+import { router } from "expo-router";
 
 const QuestionDB = () => {
   const [file, setFile] = useState<any | null>(null);
@@ -11,13 +13,16 @@ const QuestionDB = () => {
   const [uploadedPublicUrl, setUploadedPublicUrl] = useState<string | null>(null);
   const [result, setResult] = useState<any | null>(null);
   const [copiedFor, setCopiedFor] = useState<string | null>(null);
+  const loadFromBackendResult = useQuestionEditorStore((s: QuestionEditorState) => s.loadFromBackendResult);
+  const selectedSubject = useQuestionEditorStore((s: QuestionEditorState) => s.selectedSubject);
+  const setSelectedSubject = useQuestionEditorStore((s: QuestionEditorState) => s.setSelectedSubject);
 
   const canSubmit = useMemo(() => {
     const sp = parseInt(startPage || "1", 10);
     const np = parseInt(numPages || "1", 10);
     // Allow send only when an upload has completed and pages are valid
-    return !!uploadedPublicUrl && Number.isFinite(sp) && sp > 0 && Number.isFinite(np) && np > 0;
-  }, [uploadedPublicUrl, startPage, numPages]);
+    return !!uploadedPublicUrl && Number.isFinite(sp) && sp > 0 && Number.isFinite(np) && np > 0 && !!selectedSubject;
+  }, [uploadedPublicUrl, startPage, numPages, selectedSubject]);
 
   const fileToDataUrl = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -133,6 +138,48 @@ const QuestionDB = () => {
         ) : null}
       </View>
 
+      {/* Subject selection shown once upload has completed */}
+      {uploadedPublicUrl ? (
+        <View style={{ gap: 8 }}>
+          <Text style={{ fontWeight: "500" }}>Subject</Text>
+          {Platform.OS === "web" ? (
+            // @ts-ignore web-only select
+            <select
+              value={selectedSubject ?? ""}
+              onChange={(e: any) => setSelectedSubject(e?.target?.value || null)}
+              style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 8, minWidth: 200 }}
+            >
+              {/* @ts-ignore */}
+              <option value="" disabled>
+                Select subject
+              </option>
+              {SUBJECTS.map((s) => (
+                // @ts-ignore web-only option
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <TextInput
+              value={selectedSubject ?? ""}
+              onChangeText={(t) => setSelectedSubject(t || null)}
+              placeholder="Enter subject"
+              style={{
+                borderWidth: 1,
+                borderColor: "#ccc",
+                borderRadius: 6,
+                paddingHorizontal: 10,
+                paddingVertical: 8,
+              }}
+            />
+          )}
+          {!selectedSubject ? (
+            <Text style={{ color: "#C00", fontSize: 12 }}>Subject is required before processing.</Text>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={{ gap: 8 }}>
         <Text style={{ fontWeight: "500" }}>Start Page</Text>
         <TextInput
@@ -181,6 +228,13 @@ const QuestionDB = () => {
               const np = Math.max(parseInt(numPages || "1", 10) || 1, 1);
               const resp = await processQuestionPdf({ pdfUrl: uploadedPublicUrl, startPage: sp, numPages: np });
               setResult(resp);
+              // Load into editor store and navigate to editor screen
+              try {
+                loadFromBackendResult(resp);
+                router.push("/(admin)/question-editor");
+              } catch {
+                // ignore store/navigation errors to still show raw result
+              }
             } catch (e: any) {
               setResult({ error: e?.response?.data || e?.message || "Processing failed" });
             } finally {

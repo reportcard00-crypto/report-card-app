@@ -59,4 +59,215 @@ export async function processQuestionPdf(params: { pdfUrl: string; startPage: nu
   return resp.data as any;
 }
 
+export async function generateQuestionMetadata(params: {
+  text: string;
+  options: string[];
+  subject?: string | null;
+  preferExamTag?: string;
+}) {
+  const payload = {
+    text: params.text,
+    options: params.options,
+    subject: params.subject ?? undefined,
+    preferExamTag: params.preferExamTag ?? undefined,
+  };
+  const resp = await apiClient.post(`/api/admin/questions/auto-metadata`, payload);
+  return resp.data as {
+    success: boolean;
+    data: {
+      chapter: string | null;
+      difficulty: "easy" | "medium" | "hard";
+      topics: string[];
+      tags: string[];
+      correctIndex: number;
+      description: string;
+    };
+  };
+}
+
+export async function saveQuestionsBatch(params: {
+  subject: string;
+  sourceFileUrl?: string;
+  items: Array<{
+    text: string;
+    options: string[];
+    correctIndex?: number | null;
+    image?: string | null;
+    chapter?: string | null;
+    difficulty?: "easy" | "medium" | "hard" | null;
+    topics?: string[];
+    tags?: string[];
+    description?: string | null;
+    sourcePage?: number | null;
+  }>;
+}) {
+  const resp = await apiClient.post(`/api/admin/questions/batch`, params);
+  return resp.data as {
+    success: boolean;
+    data: { id: string; pineconeId?: string }[];
+  };
+}
+
+export type GeneratedPaperItem = {
+  text: string;
+  options: string[];
+  correctIndex: number;
+  subject: string;
+  chapter?: string | null;
+  topics?: string[];
+  tags?: string[];
+  difficulty: "easy" | "medium" | "hard";
+  source?: { curatedPineconeIds?: string[] };
+};
+
+export async function generateQuestionPaper(params: {
+  subject: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  easyCount: number;
+  mediumCount: number;
+  hardCount: number;
+  tags?: string[];
+  topics?: string[];
+  description?: string | null;
+}) {
+  const payload = {
+    subject: params.subject,
+    chapter: params.chapter ?? null,
+    overallDifficulty: params.overallDifficulty ?? null,
+    easyCount: params.easyCount,
+    mediumCount: params.mediumCount,
+    hardCount: params.hardCount,
+    tags: params.tags ?? [],
+    topics: params.topics ?? [],
+    description: params.description ?? "",
+  };
+  const resp = await apiClient.post(`/api/admin/papers/generate`, payload);
+  return resp.data as {
+    success: boolean;
+    data: GeneratedPaperItem[];
+    meta?: unknown;
+  };
+}
+
+export type GeneratedPaperItemV1_5 = {
+  text: string;
+  options: string[];
+  correctIndex: number;
+  subject: string;
+  chapter?: string | null;
+  topics?: string[];
+  tags?: string[];
+  difficulty: "easy" | "medium" | "hard";
+  source?: { permutation?: string; curatedPineconeIds?: string[] };
+};
+
+export type GeneratePaperV1_5Response = {
+  success: boolean;
+  data: GeneratedPaperItemV1_5[];
+  meta?: {
+    requested: { easy: number; medium: number; hard: number; total: number };
+    generated: {
+      total: number;
+      byDifficulty: { easy: number; medium: number; hard: number };
+    };
+    iterations: number;
+    permutationsAvailable: number;
+    permutationsUsed: number;
+    topicsDiscovered: number;
+    tagsDiscovered: number;
+  };
+};
+
+export async function generateQuestionPaperV1_5(params: {
+  subject: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  easyCount: number;
+  mediumCount: number;
+  hardCount: number;
+  tags?: string[];
+  topics?: string[];
+  description?: string | null;
+  maxIterations?: number;
+}) {
+  const payload = {
+    subject: params.subject,
+    chapter: params.chapter ?? null,
+    overallDifficulty: params.overallDifficulty ?? null,
+    easyCount: params.easyCount,
+    mediumCount: params.mediumCount,
+    hardCount: params.hardCount,
+    tags: params.tags ?? [],
+    topics: params.topics ?? [],
+    description: params.description ?? "",
+    maxIterations: params.maxIterations ?? 3,
+  };
+  const resp = await apiClient.post(`/api/admin/papers/generate-v1.5`, payload);
+  return resp.data as GeneratePaperV1_5Response;
+}
+
+export type GeneratedPaperItemV2 = {
+  text: string;
+  options: string[];
+  correctIndex: number;
+  subject: string;
+  chapter?: string | null;
+  topics?: string[];
+  tags?: string[];
+  difficulty: "easy" | "medium" | "hard";
+  source?: { keyword?: string; curatedPineconeIds?: string[] };
+};
+
+export type GeneratePaperV2Response = {
+  success: boolean;
+  data: GeneratedPaperItemV2[];
+  meta?: {
+    requested: { easy: number; medium: number; hard: number; total: number };
+    generated: {
+      total: number;
+      byDifficulty: { easy: number; medium: number; hard: number };
+    };
+    iterations: number;
+    keywordsUsed: string[];
+    evaluation?: {
+      overallScore: number;
+      coverageScore: number;
+      diversityScore: number;
+      difficultyBalanceScore: number;
+      suggestions: string[];
+      weakAreas: string[];
+      missingTopics: string[];
+    };
+  };
+};
+
+export async function generateQuestionPaperV2(params: {
+  subject: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  easyCount: number;
+  mediumCount: number;
+  hardCount: number;
+  tags?: string[];
+  topics?: string[];
+  description?: string | null;
+  maxIterations?: number;
+}) {
+  const payload = {
+    subject: params.subject,
+    chapter: params.chapter ?? null,
+    overallDifficulty: params.overallDifficulty ?? null,
+    easyCount: params.easyCount,
+    mediumCount: params.mediumCount,
+    hardCount: params.hardCount,
+    tags: params.tags ?? [],
+    topics: params.topics ?? [],
+    description: params.description ?? "",
+    maxIterations: params.maxIterations ?? 2,
+  };
+  const resp = await apiClient.post(`/api/admin/papers/generate-v2`, payload);
+  return resp.data as GeneratePaperV2Response;
+}
+
 

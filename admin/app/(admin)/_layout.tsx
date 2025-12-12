@@ -34,6 +34,11 @@ export default function AdminLayout() {
       <Drawer.Screen name="index" options={{ title: "Users" }} />
       <Drawer.Screen name="analytics" options={{ title: "Analytics" }} />
       <Drawer.Screen name="question-db" options={{ title: "Question DB" }} />
+      <Drawer.Screen name="paper-generator" options={{ title: "Paper Generator" }} />
+      <Drawer.Screen
+        name="question-editor"
+        options={{ title: "Question Editor", drawerItemStyle: { display: "none" } }}
+      />
     </Drawer>
   );
 }
