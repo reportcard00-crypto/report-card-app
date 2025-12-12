@@ -7,6 +7,7 @@
         "@aws-sdk/client-s3": "^3.937.0",
         "@aws-sdk/s3-request-presigner": "^3.937.0",
         "@napi-rs/canvas": "^0.1.54",
+        "@pinecone-database/pinecone": "^6.1.3",
         "@types/axios": "^0.14.4",
         "@types/cors": "^2.8.19",
         "@types/dotenv": "^8.2.3",
@@ -141,6 +142,8 @@
     "@napi-rs/canvas-linux-x64-musl": ["@napi-rs/canvas-linux-x64-musl@0.1.82", "", { "os": "linux", "cpu": "x64" }, "sha512-Be9Wf5RTv1w6GXlTph55K3PH3vsAh1Ax4T1FQY1UYM0QfD0yrwGdnJ8/fhqw7dEgMjd59zIbjJQC8C3msbGn5g=="],
 
     "@napi-rs/canvas-win32-x64-msvc": ["@napi-rs/canvas-win32-x64-msvc@0.1.82", "", { "os": "win32", "cpu": "x64" }, "sha512-LN/i8VrvxTDmEEK1c10z2cdOTkWT76LlTGtyZe5Kr1sqoSomKeExAjbilnu1+oee5lZUgS5yfZ2LNlVhCeARuw=="],
+
+    "@pinecone-database/pinecone": ["@pinecone-database/pinecone@6.1.3", "", {}, "sha512-EegC8sLP40+xdq3bu80TR6OZe3Sc4LuJFSFZb8RbMr3xvODEsvXe4QoS+kFx2PDR5g3dokP44NFR9AxseCeVQA=="],
 
     "@smithy/abort-controller": ["@smithy/abort-controller@4.2.5", "", { "dependencies": { "@smithy/types": "^4.9.0", "tslib": "^2.6.2" } }, "sha512-j7HwVkBw68YW8UmFRcjZOmssE77Rvk0GWAIN1oFBhsaovQmZWYCIcGa9/pwRB0ExI8Sk9MWNALTjftjHZea7VA=="],
 

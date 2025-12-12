@@ -6,6 +6,10 @@ import { createCanvas } from "@napi-rs/canvas";
 import { getDocument } from "pdfjs-dist";
 import type { CustomRequest } from "../types";
 import { uploadBufferToR2 } from "../utils/fileupload";
+import Question from "../models/questionModel";
+import { getEmbeddingForText, upsertVectorsToPinecone, querySimilarInPinecone } from "../utils/vector";
+import { v4 as uuidv4 } from "uuid";
+import { createHash } from "crypto";
 
 export const listUsers = async (req: Request, res: Response) => {
   try {
@@ -77,6 +81,175 @@ export const updateUserRole = async (req: Request, res: Response) => {
     res.status(200).json({ success: true, user });
   } catch (error) {
     console.error("Error updating user role:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const generateQuestionMetadata = async (req: CustomRequest, res: Response) => {
+  try {
+    const { text, options, subject, preferExamTag } = (req.body || {}) as {
+      text?: string;
+      options?: string[];
+      subject?: string | null;
+      preferExamTag?: string | null;
+    };
+
+    const questionText = String(text || "").trim();
+    const choices: string[] = Array.isArray(options)
+      ? options.map((o) => String(o ?? "")).filter((s) => s.length > 0)
+      : [];
+    const subjectText = subject ? String(subject).trim() : "";
+    const preferredExam = preferExamTag ? String(preferExamTag).trim() : "";
+
+    if (!questionText) {
+      res.status(400).json({ success: false, message: "text is required" });
+      return;
+    }
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      res.status(500).json({ success: false, message: "OPENROUTER_API_KEY not configured" });
+      return;
+    }
+
+    // Prefer Perplexity online/browsing-capable models (stable on chat-completions)
+    const modelCandidates = [
+      "perplexity/sonar-deep-research",
+    ];
+    const systemPrompt =
+      "You are an expert educational content analyst for Indian competitive exams. " +
+      "Given a question (and optionally its multiple-choice options), infer rich, useful metadata with care. " +
+      "When helpful, use web research to identify canonical chapter/topic names, exam contexts, or commonly associated tags. " +
+      "Return ONLY strict JSON. Do not include any extra text. " +
+      "CRITICAL: The `description` field must be an exam-relevance summary (not a paraphrase of the question).";
+
+    const schemaExample = {
+      chapter: "string | null",
+      topics: ["string", "string"],
+      tags: ["string", "string"],
+      difficulty: "easy | medium | hard",
+      description: "string",
+      correctIndex: "number | null",
+    };
+
+    const userInstructions =
+      "Generate metadata for the following question.\n" +
+      (subjectText ? `- Subject: ${subjectText}\n` : "") +
+      (preferredExam ? `- Primary exam context (if relevant): ${preferredExam}\n` : "") +
+      "- Use web search if it materially improves accuracy or specificity (e.g., past paper appearances).\n" +
+      "- Use neutral, widely-recognized naming for chapter and topics.\n" +
+      "- Tags should be helpful for search and organization; include exam tags (e.g., JEE Mains/NEET/Boards) only when meaningful.\n" +
+      "- If options are provided, set correctIndex to the index (0-based) of the most plausible correct option; otherwise null.\n" +
+      "- DESCRIPTION REQUIREMENTS (very important):\n" +
+      "  • Write a compact exam-relevance summary, not a restatement of the question.\n" +
+      "  • Prefer a 3–6 line bullet-style paragraph covering: Past appearances (years/exams if known or 'similar to'),\n" +
+      "    importance/weightage within the subject/chapter, skills/concepts tested, typical marks/time, and predicted likelihood (High/Medium/Low) next cycle.\n" +
+      "  • Where helpful, include 1–2 short reputable references (e.g., NCERT chapter name/section, standard book chapter, or a credible syllabus link). Keep URLs short.\n" +
+      "  • Example tone: \"JEE Mains trend: frequently seen in 2019(Shift 1), 2022(Shift 2, similar). Weightage ~2–3% in Mechanics; tests Newton's laws + system acceleration. Likelihood: High. Refs: NCERT XI Physics Ch.5; [NTA Archive].\"\n" +
+      "- Respond with ONLY a JSON object conforming to this schema:\n" +
+      JSON.stringify(schemaExample, null, 2) +
+      "\n\nQuestion:\n" +
+      questionText +
+      (choices.length > 0
+        ? "\n\nOptions (in order):\n" + choices.map((c, i) => `${i}. ${c}`).join("\n")
+        : "");
+
+    const headers = {
+      Authorization: `Bearer ${openrouterApiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost",
+      "X-Title": process.env.OPENROUTER_APP_NAME || "ReportCardApp",
+    };
+
+    let content = "";
+    let lastError: any = null;
+    for (const model of modelCandidates) {
+      const payload = {
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userInstructions },
+        ],
+        temperature: 0.6,
+        max_tokens: 800,
+        // Extra fields are forwarded to the model on OpenRouter; Perplexity models respect web_search
+        extra_body: {
+          web_search: true,
+          return_citations: true,
+        },
+      };
+      try {
+        const resp = await axios.post("https://openrouter.ai/api/v1/chat/completions", payload, { headers });
+        content = String(resp?.data?.choices?.[0]?.message?.content ?? "").trim();
+        if (content) break;
+      } catch (err) {
+        lastError = err;
+        // try next candidate
+        continue;
+      }
+    }
+    if (!content) {
+      // Surface upstream error details for debugging
+      try {
+        const status = lastError?.response?.status;
+        const data = lastError?.response?.data;
+        console.error("OpenRouter metadata generation failed for all models:", status, data || lastError);
+      } catch {
+        console.error("OpenRouter metadata generation failed for all models:", lastError);
+      }
+      res.status(502).json({ success: false, message: "Upstream AI service failed" });
+      return;
+    }
+
+    // Try to parse strict JSON object
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      const jsonText = extractJsonObject(content);
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch (e) {
+        console.error("Failed to parse AI JSON response:", e, content);
+        parsed = {};
+      }
+    }
+
+    // Coerce and validate fields with minimal restriction
+    const chapter =
+      parsed?.chapter === null || parsed?.chapter === undefined || String(parsed?.chapter).trim() === ""
+        ? null
+        : String(parsed.chapter);
+    const topics: string[] = Array.isArray(parsed?.topics)
+      ? parsed.topics.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+      : [];
+    const tags: string[] = Array.isArray(parsed?.tags)
+      ? parsed.tags.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+      : [];
+    const diffRaw = String(parsed?.difficulty || "").toLowerCase();
+    const difficulty: "easy" | "medium" | "hard" =
+      diffRaw === "easy" || diffRaw === "hard" ? (diffRaw as any) : "medium";
+    const description = typeof parsed?.description === "string" ? parsed.description : "";
+    const proposedIndex =
+      typeof parsed?.correctIndex === "number" ? parsed.correctIndex : null;
+    const correctIndex =
+      choices.length > 0 && typeof proposedIndex === "number" && proposedIndex >= 0 && proposedIndex < choices.length
+        ? proposedIndex
+        : undefined;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        chapter,
+        difficulty,
+        topics,
+        tags,
+        correctIndex,
+        description,
+      },
+    });
+  } catch (error) {
+    console.error("Error generating question metadata:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
@@ -299,6 +472,560 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
   }
 };
 
+export const saveQuestionsBatch = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+    const body = (req.body || {}) as {
+      subject?: string | null;
+      sourceFileUrl?: string | null;
+      items?: Array<{
+        text?: string;
+        options?: string[];
+        correctIndex?: number | null;
+        image?: string | null;
+        chapter?: string | null;
+        difficulty?: "easy" | "medium" | "hard" | null;
+        topics?: string[];
+        tags?: string[];
+        description?: string | null;
+        sourcePage?: number | null;
+      }>;
+    };
+    const subject = String(body?.subject || "").trim();
+    if (!subject) {
+      res.status(400).json({ success: false, message: "subject is required" });
+      return;
+    }
+    const items = Array.isArray(body?.items) ? body.items : [];
+    if (items.length === 0) {
+      res.status(400).json({ success: false, message: "items is required" });
+      return;
+    }
+
+    // Helpers to normalize and hash
+    const normalize = (s: string) =>
+      s
+        .normalize("NFKC")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+    const computeHash = (subjectVal: string, textVal: string, optionVals: string[]) => {
+      const base = [
+        normalize(subjectVal),
+        normalize(textVal),
+        ...optionVals.map((o) => normalize(o)),
+      ].join("||");
+      return createHash("sha256").update(base).digest("hex");
+    };
+
+    // Prepare in-memory dedupe and build candidate docs
+    const draftDocs: Array<{
+      text: string;
+      options: string[];
+      correctIndex?: number;
+      image?: string;
+      subject: string;
+      chapter?: string;
+      difficulty?: string;
+      topics: string[];
+      tags: string[];
+      description?: string;
+      sourceFileUrl?: string;
+      sourcePage?: number;
+      pineconeId?: string;
+      createdBy: any;
+      contentHash: string;
+    }> = [];
+    const seenHashes = new Set<string>();
+
+    for (const item of items) {
+      const text = String(item?.text || "").trim();
+      const options = Array.isArray(item?.options) ? item.options.map((o) => String(o)) : [];
+      if (!text || options.length === 0) {
+        // skip invalid
+        continue;
+      }
+      const correctIndex =
+        typeof item?.correctIndex === "number" && item.correctIndex >= 0 && item.correctIndex < options.length
+          ? item.correctIndex
+          : undefined;
+      const chapter = item?.chapter ? String(item.chapter) : undefined;
+      const difficulty = item?.difficulty ? String(item.difficulty) : undefined;
+      const topics = Array.isArray(item?.topics) ? item.topics.map((t) => String(t)) : [];
+      const tags = Array.isArray(item?.tags) ? item.tags.map((t) => String(t)) : [];
+      const description = item?.description ? String(item.description) : undefined;
+      const image = item?.image ? String(item.image) : undefined;
+      const sourceFileUrl = body?.sourceFileUrl ? String(body.sourceFileUrl) : undefined;
+      const sourcePage = typeof item?.sourcePage === "number" ? item.sourcePage : undefined;
+
+      const contentHash = computeHash(subject, text, options);
+      if (seenHashes.has(contentHash)) {
+        // duplicate within batch; skip
+        continue;
+      }
+      seenHashes.add(contentHash);
+
+      const doc = {
+        text,
+        options,
+        correctIndex,
+        image,
+        subject,
+        chapter,
+        difficulty,
+        topics,
+        tags,
+        description,
+        sourceFileUrl,
+        sourcePage,
+        pineconeId: undefined as string | undefined,
+        createdBy: currentUser._id,
+        contentHash,
+      };
+      draftDocs.push(doc);
+    }
+
+    if (draftDocs.length === 0) {
+      res.status(400).json({ success: false, message: "No valid questions to save" });
+      return;
+    }
+
+    // Check DB for existing by contentHash
+    const allHashes = draftDocs.map((d) => d.contentHash);
+    const existing = await Question.find({ contentHash: { $in: allHashes } }).select("contentHash");
+    const existingSet = new Set(existing.map((e) => String((e as any).contentHash)));
+    const toInsert = draftDocs.filter((d) => !existingSet.has(d.contentHash));
+    const duplicatesSkipped = draftDocs.length - toInsert.length;
+
+    if (toInsert.length === 0) {
+      res.status(200).json({
+        success: true,
+        data: [],
+        meta: { inserted: 0, duplicatesSkipped },
+      });
+      return;
+    }
+
+    // Prepare vectors for new docs only
+    const vectors: { id: string; values: number[]; metadata?: Record<string, string | number | boolean | string[]> }[] = [];
+
+    // Create embeddings in sequence (can parallelize if rate limits allow)
+    for (const doc of toInsert) {
+      const embedTextParts = [
+        doc.subject,
+        doc.chapter || "",
+        doc.text,
+        ...(doc.options || []).map((o: string, i: number) => `(${i + 1}) ${o}`),
+        doc.description || "",
+        (doc.topics || []).join(", "),
+        (doc.tags || []).join(", "),
+        doc.difficulty || "",
+      ].filter(Boolean);
+      const embedInput = embedTextParts.join("\n");
+      const values = await getEmbeddingForText(embedInput);
+      const vecId = uuidv4();
+      doc.pineconeId = vecId;
+      // Build Pinecone metadata without nulls; only allowed types: string, number, boolean, string[]
+      const metadata: Record<string, string | number | boolean | string[]> = {
+        subject: doc.subject,
+        hasImage: Boolean(doc.image),
+      };
+      if (doc.chapter) metadata.chapter = doc.chapter;
+      if (doc.difficulty) metadata.difficulty = doc.difficulty;
+      if (doc.topics && doc.topics.length > 0) metadata.topics = doc.topics;
+      if (doc.tags && doc.tags.length > 0) metadata.tags = doc.tags;
+      if (doc.sourceFileUrl) metadata.sourceFileUrl = doc.sourceFileUrl;
+      vectors.push({
+        id: vecId,
+        values,
+        metadata,
+      });
+    }
+
+    // Upsert vectors then save docs
+    await upsertVectorsToPinecone(vectors);
+    const created = await Question.insertMany(toInsert);
+
+    res.status(200).json({
+      success: true,
+      data: created.map((q) => ({
+        id: q._id,
+        pineconeId: q.pineconeId,
+      })),
+      meta: { inserted: created.length, duplicatesSkipped },
+    });
+  } catch (error) {
+    console.error("Error saving questions batch:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const generateQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as {
+      subject?: string;
+      chapter?: string | null;
+      overallDifficulty?: "easy" | "medium" | "hard" | null;
+      easyCount?: number | string | null;
+      mediumCount?: number | string | null;
+      hardCount?: number | string | null;
+      tags?: string[];
+      topics?: string[];
+      description?: string | null;
+    };
+    const subject = String(body?.subject || "").trim();
+    if (!subject) {
+      res.status(400).json({ success: false, message: "subject is required" });
+      return;
+    }
+    const chapter = body?.chapter ? String(body.chapter).trim() : null;
+    const overallDifficulty = body?.overallDifficulty ? String(body.overallDifficulty).toLowerCase() as any : null;
+    const tags = Array.isArray(body?.tags) ? body.tags.map((t) => String(t)) : [];
+    const topics = Array.isArray(body?.topics) ? body.topics.map((t) => String(t)) : [];
+    const description = body?.description ? String(body.description) : "";
+    const easyCount = Math.max(parseInt(String(body?.easyCount ?? "0"), 10) || 0, 0);
+    const mediumCount = Math.max(parseInt(String(body?.mediumCount ?? "0"), 10) || 0, 0);
+    const hardCount = Math.max(parseInt(String(body?.hardCount ?? "0"), 10) || 0, 0);
+    const targetCounts: Record<"easy" | "medium" | "hard", number> = {
+      easy: easyCount,
+      medium: mediumCount,
+      hard: hardCount,
+    };
+    const totalRequested = easyCount + mediumCount + hardCount;
+    if (totalRequested <= 0) {
+      res.status(400).json({ success: false, message: "At least one of easy/medium/hard counts must be > 0" });
+      return;
+    }
+
+    // Build the generation schedule
+    const difficultiesOrder: Array<"easy" | "medium" | "hard"> = ["easy", "medium", "hard"];
+    const schedule: Array<"easy" | "medium" | "hard"> = [];
+    for (const d of difficultiesOrder) {
+      for (let i = 0; i < targetCounts[d]; i++) schedule.push(d);
+    }
+
+    type GeneratedItem = {
+      text: string;
+      options: string[];
+      correctIndex: number;
+      subject: string;
+      chapter?: string | null;
+      topics?: string[];
+      tags?: string[];
+      difficulty: "easy" | "medium" | "hard";
+      source: {
+        curatedPineconeIds: string[];
+      };
+    };
+
+    const normalize = (s: string) =>
+      String(s || "")
+        .normalize("NFKC")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+    const computeHash = (subjectVal: string, textVal: string, optionVals: string[]) => {
+      const base = [
+        normalize(subjectVal),
+        normalize(textVal),
+        ...optionVals.map((o) => normalize(o)),
+      ].join("||");
+      return createHash("sha256").update(base).digest("hex");
+    };
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      res.status(500).json({ success: false, message: "OPENROUTER_API_KEY not configured" });
+      return;
+    }
+    const headers = {
+      Authorization: `Bearer ${openrouterApiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost",
+      "X-Title": process.env.OPENROUTER_APP_NAME || "ReportCardApp",
+    };
+    const modelCandidates = [
+      "anthropic/claude-3.5-sonnet",
+      "openai/gpt-4o-mini",
+      "google/gemini-2.0-flash",
+    ];
+
+    const generated: GeneratedItem[] = [];
+    const seenContentHashes = new Set<string>();
+    const seenTexts = new Set<string>();
+
+    // ============================================================
+    // PRE-FETCH: Retrieve all questions upfront for each difficulty
+    // ============================================================
+    const curatedByDifficulty: Record<"easy" | "medium" | "hard", any[]> = {
+      easy: [],
+      medium: [],
+      hard: [],
+    };
+
+    for (const diff of difficultiesOrder) {
+      if (targetCounts[diff] <= 0) continue;
+
+      // Retrieval query embedding
+      const retrievalParts = [
+        `Subject: ${subject}`,
+        chapter ? `Chapter: ${chapter}` : "",
+        `Difficulty: ${diff}`,
+        topics.length ? `Topics: ${topics.join(", ")}` : "",
+        tags.length ? `Tags: ${tags.join(", ")}` : "",
+        "Type: multiple-choice question",
+      ].filter(Boolean);
+      const retrievalQuery = retrievalParts.join("\n");
+      const queryVec = await getEmbeddingForText(retrievalQuery);
+
+      // Use simple metadata filters on Pinecone
+      const pineconeFilter: Record<string, unknown> = { subject };
+      if (chapter) pineconeFilter.chapter = chapter;
+      pineconeFilter.difficulty = diff;
+
+      const matches = await querySimilarInPinecone({
+        values: queryVec,
+        topK: 300,
+        filter: pineconeFilter,
+        includeMetadata: true,
+      });
+      const ids = matches.map((m) => m.id).filter(Boolean);
+      const candidateDocs = ids.length
+        ? await Question.find({ pineconeId: { $in: ids } })
+            .select("text options correctIndex subject chapter topics tags difficulty pineconeId")
+            .lean()
+        : [];
+      const idToDoc = new Map<string, any>();
+      for (const doc of candidateDocs) {
+        idToDoc.set(String(doc.pineconeId), doc);
+      }
+      // Maintain score order from matches
+      curatedByDifficulty[diff] = matches
+        .map((m) => idToDoc.get(m.id))
+        .filter((d) => d && d.text && Array.isArray(d.options) && d.options.length > 0);
+    }
+
+    // Track which curated questions have been used for inspiration
+    const usedCuratedIndices: Record<"easy" | "medium" | "hard", number> = {
+      easy: 0,
+      medium: 0,
+      hard: 0,
+    };
+
+    for (const difficulty of schedule) {
+      // Get the next batch of curated questions for this difficulty
+      const allCurated = curatedByDifficulty[difficulty];
+      const startIdx = usedCuratedIndices[difficulty];
+      const curated = allCurated.slice(startIdx, startIdx + 6);
+      usedCuratedIndices[difficulty] = startIdx + 6;
+
+      const avoidTexts = generated.map((g) => g.text);
+      const curatedForPrompt = curated.map((d: any, i: number) => ({
+        idx: i + 1,
+        text: d.text,
+        options: d.options,
+        correctIndex: typeof d.correctIndex === "number" ? d.correctIndex : undefined,
+        chapter: d.chapter || null,
+        topics: d.topics || [],
+        tags: d.tags || [],
+        difficulty: d.difficulty || difficulty,
+      }));
+
+      const systemPrompt =
+        "You are an expert exam question setter for Indian competitive exams. " +
+        "Generate ONE high-quality, original, non-repetitive multiple-choice question (MCQ). " +
+        "Strictly respond with a single JSON object only; no prose.";
+
+      const userPrompt =
+        [
+          `Constraints:`,
+          `- Subject: ${subject}`,
+          chapter ? `- Chapter: ${chapter}` : `- Chapter: (any within subject)`,
+          `- Difficulty: ${difficulty}${overallDifficulty ? ` (overall target: ${overallDifficulty})` : ""}`,
+          tags.length ? `- Tags (prefer/include when natural): ${tags.join(", ")}` : "",
+          topics.length ? `- Topics focus (optional): ${topics.join(", ")}` : "",
+          description ? `- Notes: ${description}` : "",
+          "",
+          "Use these retrieved examples only as inspiration (do not copy):",
+          JSON.stringify(curatedForPrompt, null, 2),
+          "",
+          avoidTexts.length
+            ? `Avoid repeating or paraphrasing any of these generated questions:\n${avoidTexts.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
+            : "No previously generated questions.",
+          "",
+          "Output JSON schema (strict):",
+          JSON.stringify(
+            {
+              text: "string",
+              options: ["string", "string", "string", "string"],
+              correctIndex: 0,
+              chapter: "string | null",
+              topics: ["string"],
+              tags: ["string"],
+              difficulty: "easy | medium | hard",
+            },
+            null,
+            2
+          ),
+          "",
+          "Rules:",
+          "- options must be 4–5 concise choices; set correctIndex to the correct option (0-based).",
+          "- Ensure originality vs examples and avoids; vary context and phrasing.",
+          "- Prefer the given chapter/topics when they make sense; otherwise choose appropriate ones.",
+        ].filter(Boolean).join("\n");
+
+      let content = "";
+      let lastError: any = null;
+      for (const model of modelCandidates) {
+        const payload = {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.7,
+          max_tokens: 800,
+        };
+        try {
+          const resp = await axios.post("https://openrouter.ai/api/v1/chat/completions", payload, { headers });
+          content = String(resp?.data?.choices?.[0]?.message?.content ?? "").trim();
+          if (content) break;
+        } catch (err) {
+          lastError = err;
+          continue;
+        }
+      }
+      if (!content) {
+        try {
+          const status = lastError?.response?.status;
+          const data = lastError?.response?.data;
+          console.error("OpenRouter paper generation failed for all models:", status, data || lastError);
+        } catch {
+          console.error("OpenRouter paper generation failed for all models:", lastError);
+        }
+        res.status(502).json({ success: false, message: "Upstream AI service failed" });
+        return;
+      }
+
+      // Parse JSON
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        try {
+          parsed = JSON.parse(extractJsonObject(content));
+        } catch (e) {
+          parsed = {};
+        }
+      }
+
+      // Minimal validation and up to 2 retries for invalid/bad duplicates
+      let attempts = 0;
+      let accepted: GeneratedItem | null = null;
+      while (attempts < 2) {
+        attempts++;
+        const text = String(parsed?.text || "").trim();
+        const options: string[] = Array.isArray(parsed?.options)
+          ? parsed.options.map((o: any) => String(o)).filter((s: string) => s.length > 0)
+          : [];
+        const ciRaw = parsed?.correctIndex;
+        const correctIndex =
+          typeof ciRaw === "number" && ciRaw >= 0 && ciRaw < options.length ? ciRaw : -1;
+        const outChapter =
+          parsed?.chapter === null || parsed?.chapter === undefined || String(parsed?.chapter).trim() === ""
+            ? null
+            : String(parsed.chapter);
+        const outTopics: string[] = Array.isArray(parsed?.topics)
+          ? parsed.topics.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+          : [];
+        const outTags: string[] = Array.isArray(parsed?.tags)
+          ? parsed.tags.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+          : [];
+        const outDiffRaw = String(parsed?.difficulty || "").toLowerCase();
+        const outDifficulty: "easy" | "medium" | "hard" =
+          outDiffRaw === "easy" || outDiffRaw === "hard" ? (outDiffRaw as any) : "medium";
+
+        const basicValid = text && options.length >= 4 && correctIndex >= 0;
+        const contentHash = basicValid ? computeHash(subject, text, options) : "";
+        const duplicate =
+          basicValid &&
+          (seenContentHashes.has(contentHash) || seenTexts.has(normalize(text)));
+
+        if (basicValid && !duplicate) {
+          accepted = {
+            text,
+            options,
+            correctIndex,
+            subject,
+            chapter: outChapter,
+            topics: outTopics,
+            tags: outTags,
+            difficulty: outDifficulty,
+            source: { curatedPineconeIds: curated.map((c: any) => String(c.pineconeId || "")) },
+          };
+          seenContentHashes.add(contentHash);
+          seenTexts.add(normalize(text));
+          break;
+        }
+
+        // Retry with stricter avoid list
+        const retryUserPrompt =
+          userPrompt +
+          "\n\nThe previous output was invalid or too similar to earlier questions. Regenerate strictly adhering to schema and originality.";
+        let retryContent = "";
+        for (const model of modelCandidates) {
+          const retryPayload = {
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: retryUserPrompt },
+            ],
+            temperature: 0.6,
+            max_tokens: 800,
+          };
+          try {
+            const retryResp = await axios.post("https://openrouter.ai/api/v1/chat/completions", retryPayload, { headers });
+            retryContent = String(retryResp?.data?.choices?.[0]?.message?.content ?? "").trim();
+            if (retryContent) break;
+          } catch {
+            continue;
+          }
+        }
+        try {
+          parsed = JSON.parse(retryContent);
+        } catch {
+          try {
+            parsed = JSON.parse(extractJsonObject(retryContent));
+          } catch {
+            parsed = {};
+          }
+        }
+      }
+
+      if (accepted) {
+        generated.push(accepted);
+      }
+      // If not accepted after retries, skip to next in schedule
+    }
+
+    res.status(200).json({
+      success: true,
+      data: generated,
+      meta: {
+        requested: { easy: easyCount, medium: mediumCount, hard: hardCount, total: totalRequested },
+        generated: { total: generated.length },
+      },
+    });
+  } catch (error) {
+    console.error("Error generating question paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 function extractJsonArray(text: string): string {
   // Try direct parse
   try {
@@ -318,5 +1045,1291 @@ function extractJsonArray(text: string): string {
   }
   return "[]";
 }
+
+function extractJsonObject(text: string): string {
+  // Try direct parse
+  try {
+    JSON.parse(text);
+    return text;
+  } catch {}
+  // Try JSON code block
+  const blockMatch = text.match(/```json([\s\S]*?)```/i);
+  if (blockMatch) {
+    return (blockMatch[1] ?? "{}").trim();
+  }
+  // Fallback: grab the first {...} block
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    return text.slice(start, end + 1);
+  }
+  return "{}";
+}
+
+/**
+ * generateQuestionPaperv1_5 - Enhanced question paper generation with:
+ * 1. Permutation-based retrieval using combinations of topics, tags, and difficulty
+ * 2. Each iteration retrieves ~50 questions with different filter combinations
+ * 3. Diverse inspiration contexts for better question variety
+ * 4. Lightweight evaluation without LLM-powered keyword generation
+ */
+export const generateQuestionPaperv1_5 = async (req: CustomRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as {
+      subject?: string;
+      chapter?: string | null;
+      overallDifficulty?: "easy" | "medium" | "hard" | null;
+      easyCount?: number | string | null;
+      mediumCount?: number | string | null;
+      hardCount?: number | string | null;
+      tags?: string[];
+      topics?: string[];
+      description?: string | null;
+      maxIterations?: number | string | null;
+    };
+
+    const subject = String(body?.subject || "").trim();
+    if (!subject) {
+      res.status(400).json({ success: false, message: "subject is required" });
+      return;
+    }
+
+    const chapter = body?.chapter ? String(body.chapter).trim() : null;
+    const overallDifficulty = body?.overallDifficulty ? String(body.overallDifficulty).toLowerCase() as any : null;
+    const inputTags = Array.isArray(body?.tags) ? body.tags.map((t) => String(t)).filter(Boolean) : [];
+    const inputTopics = Array.isArray(body?.topics) ? body.topics.map((t) => String(t)).filter(Boolean) : [];
+    const description = body?.description ? String(body.description) : "";
+    const easyCount = Math.max(parseInt(String(body?.easyCount ?? "0"), 10) || 0, 0);
+    const mediumCount = Math.max(parseInt(String(body?.mediumCount ?? "0"), 10) || 0, 0);
+    const hardCount = Math.max(parseInt(String(body?.hardCount ?? "0"), 10) || 0, 0);
+    const maxIterations = Math.min(Math.max(parseInt(String(body?.maxIterations ?? "3"), 10) || 3, 1), 10);
+
+    const targetCounts: Record<"easy" | "medium" | "hard", number> = {
+      easy: easyCount,
+      medium: mediumCount,
+      hard: hardCount,
+    };
+    const totalRequested = easyCount + mediumCount + hardCount;
+    if (totalRequested <= 0) {
+      res.status(400).json({ success: false, message: "At least one of easy/medium/hard counts must be > 0" });
+      return;
+    }
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      res.status(500).json({ success: false, message: "OPENROUTER_API_KEY not configured" });
+      return;
+    }
+
+    const headers = {
+      Authorization: `Bearer ${openrouterApiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost",
+      "X-Title": process.env.OPENROUTER_APP_NAME || "ReportCardApp",
+    };
+
+    const modelCandidates = [
+      "openai/gpt-4o-mini",
+      "anthropic/claude-3.5-sonnet",
+      "google/gemini-2.0-flash",
+    ];
+
+    const normalize = (s: string) =>
+      String(s || "")
+        .normalize("NFKC")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const computeHash = (subjectVal: string, textVal: string, optionVals: string[]) => {
+      const base = [
+        normalize(subjectVal),
+        normalize(textVal),
+        ...optionVals.map((o) => normalize(o)),
+      ].join("||");
+      return createHash("sha256").update(base).digest("hex");
+    };
+
+    // Helper to call LLM with retry across models
+    const callLLM = async (systemPrompt: string, userPrompt: string, temperature = 0.7): Promise<string> => {
+      for (const model of modelCandidates) {
+        const payload = {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature,
+          max_tokens: 1500,
+        };
+        try {
+          const resp = await axios.post("https://openrouter.ai/api/v1/chat/completions", payload, { headers });
+          const content = String(resp?.data?.choices?.[0]?.message?.content ?? "").trim();
+          if (content) return content;
+        } catch (err) {
+          continue;
+        }
+      }
+      return "";
+    };
+
+    type GeneratedItem = {
+      text: string;
+      options: string[];
+      correctIndex: number;
+      subject: string;
+      chapter?: string | null;
+      topics?: string[];
+      tags?: string[];
+      difficulty: "easy" | "medium" | "hard";
+      source: {
+        permutation: string;
+        curatedPineconeIds: string[];
+      };
+    };
+
+    // Build the generation schedule
+    const difficultiesOrder: Array<"easy" | "medium" | "hard"> = ["easy", "medium", "hard"];
+    const schedule: Array<{ difficulty: "easy" | "medium" | "hard"; index: number }> = [];
+    for (const d of difficultiesOrder) {
+      for (let i = 0; i < targetCounts[d]; i++) {
+        schedule.push({ difficulty: d, index: schedule.length });
+      }
+    }
+
+    let generated: GeneratedItem[] = [];
+    const seenContentHashes = new Set<string>();
+    const seenTexts = new Set<string>();
+    const usedPineconeIds = new Set<string>();
+
+    // ============================================================
+    // PHASE 1: Discover available topics and tags from existing DB
+    // ============================================================
+    const baseFilter: Record<string, unknown> = { subject };
+    if (chapter) baseFilter.chapter = chapter;
+
+    // Query to discover available topics and tags in the database
+    const sampleDocs = await Question.find(baseFilter)
+      .select("topics tags difficulty")
+      .limit(500)
+      .lean();
+
+    const discoveredTopics = new Set<string>();
+    const discoveredTags = new Set<string>();
+    const availableDifficulties = new Set<string>();
+
+    for (const doc of sampleDocs) {
+      if (Array.isArray((doc as any).topics)) {
+        (doc as any).topics.forEach((t: string) => discoveredTopics.add(t));
+      }
+      if (Array.isArray((doc as any).tags)) {
+        (doc as any).tags.forEach((t: string) => discoveredTags.add(t));
+      }
+      if ((doc as any).difficulty) {
+        availableDifficulties.add((doc as any).difficulty);
+      }
+    }
+
+    // Combine input topics/tags with discovered ones
+    const allTopics = [...new Set([...inputTopics, ...discoveredTopics])];
+    const allTags = [...new Set([...inputTags, ...discoveredTags])];
+
+    // ============================================================
+    // PHASE 2: Generate permutation combinations
+    // ============================================================
+    type FilterPermutation = {
+      id: string;
+      topics: string[];
+      tags: string[];
+      difficulty: "easy" | "medium" | "hard";
+      description: string;
+    };
+
+    const generatePermutations = (): FilterPermutation[] => {
+      const permutations: FilterPermutation[] = [];
+      const difficulties: Array<"easy" | "medium" | "hard"> = ["easy", "medium", "hard"];
+
+      // Create permutations for each difficulty with different topic/tag combinations
+      for (const diff of difficulties) {
+        if (targetCounts[diff] <= 0) continue;
+
+        // Permutation 1: No specific topic/tag filter (broadest)
+        permutations.push({
+          id: `${diff}-broad`,
+          topics: [],
+          tags: [],
+          difficulty: diff,
+          description: `${diff} questions - broad search`,
+        });
+
+        // Permutation 2-N: Specific topic combinations
+        for (let i = 0; i < allTopics.length; i++) {
+          const topic = allTopics[i];
+          if (topic) {
+            permutations.push({
+              id: `${diff}-topic-${i}`,
+              topics: [topic],
+              tags: [],
+              difficulty: diff,
+              description: `${diff} questions - topic: ${topic}`,
+            });
+          }
+        }
+
+        // Permutation N+1 to M: Specific tag combinations
+        for (let i = 0; i < allTags.length; i++) {
+          const tag = allTags[i];
+          if (tag) {
+            permutations.push({
+              id: `${diff}-tag-${i}`,
+              topics: [],
+              tags: [tag],
+              difficulty: diff,
+              description: `${diff} questions - tag: ${tag}`,
+            });
+          }
+        }
+
+        // Permutation M+1 to P: Combined topic + tag combinations (subset)
+        const maxCombined = Math.min(allTopics.length, 5);
+        const maxTagsCombined = Math.min(allTags.length, 3);
+        for (let i = 0; i < maxCombined; i++) {
+          for (let j = 0; j < maxTagsCombined; j++) {
+            const topic = allTopics[i];
+            const tag = allTags[j];
+            if (topic && tag) {
+              permutations.push({
+                id: `${diff}-combined-${i}-${j}`,
+                topics: [topic],
+                tags: [tag],
+                difficulty: diff,
+                description: `${diff} questions - topic: ${topic}, tag: ${tag}`,
+              });
+            }
+          }
+        }
+
+        // Permutation: Multiple topics together
+        if (allTopics.length >= 2) {
+          for (let i = 0; i < Math.min(allTopics.length - 1, 3); i++) {
+            const topic1 = allTopics[i];
+            const topic2 = allTopics[i + 1];
+            if (topic1 && topic2) {
+              permutations.push({
+                id: `${diff}-multi-topic-${i}`,
+                topics: [topic1, topic2],
+                tags: [],
+                difficulty: diff,
+                description: `${diff} questions - topics: ${topic1}, ${topic2}`,
+              });
+            }
+          }
+        }
+      }
+
+      // Shuffle to ensure variety in iteration order
+      for (let i = permutations.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [permutations[i], permutations[j]] = [permutations[j]!, permutations[i]!];
+      }
+
+      return permutations;
+    };
+
+    const allPermutations = generatePermutations();
+    console.log(`[generateQuestionPaperv1_5] Generated ${allPermutations.length} permutations from ${allTopics.length} topics and ${allTags.length} tags`);
+
+    // ============================================================
+    // PHASE 3: Retrieval cache for permutation results
+    // ============================================================
+    type RetrievalResult = {
+      permutation: FilterPermutation;
+      matches: Array<{ id: string; score: number; doc: any }>;
+    };
+
+    const retrievalCache: Map<string, RetrievalResult> = new Map();
+
+    const retrieveForPermutation = async (perm: FilterPermutation): Promise<RetrievalResult> => {
+      if (retrievalCache.has(perm.id)) {
+        return retrievalCache.get(perm.id)!;
+      }
+
+      // Build embedding query incorporating the permutation context
+      const embeddingParts = [
+        `Subject: ${subject}`,
+        chapter ? `Chapter: ${chapter}` : "",
+        `Difficulty: ${perm.difficulty}`,
+        perm.topics.length ? `Topics: ${perm.topics.join(", ")}` : "",
+        perm.tags.length ? `Tags: ${perm.tags.join(", ")}` : "",
+        "Type: multiple-choice question for competitive exam",
+        description ? `Context: ${description}` : "",
+      ].filter(Boolean);
+
+      const embedding = await getEmbeddingForText(embeddingParts.join("\n"));
+
+      // Build Pinecone filter with the permutation's constraints
+      const pineconeFilter: Record<string, unknown> = { subject };
+      if (chapter) pineconeFilter.chapter = chapter;
+      pineconeFilter.difficulty = perm.difficulty;
+
+      // Add topic filter if specified (using $in for array field)
+      if (perm.topics.length === 1) {
+        pineconeFilter.topics = { $in: perm.topics };
+      } else if (perm.topics.length > 1) {
+        // For multiple topics, we want questions that have ANY of these topics
+        pineconeFilter.topics = { $in: perm.topics };
+      }
+
+      // Add tag filter if specified
+      if (perm.tags.length === 1) {
+        pineconeFilter.tags = { $in: perm.tags };
+      } else if (perm.tags.length > 1) {
+        pineconeFilter.tags = { $in: perm.tags };
+      }
+
+      // Retrieve up to 50 questions for this permutation
+      const matches = await querySimilarInPinecone({
+        values: embedding,
+        topK: 50,
+        filter: pineconeFilter,
+        includeMetadata: true,
+      });
+
+      // Fetch full documents from MongoDB
+      const ids = matches.map((m) => m.id).filter(Boolean);
+      const docs = ids.length
+        ? await Question.find({ pineconeId: { $in: ids } })
+            .select("text options correctIndex subject chapter topics tags difficulty pineconeId")
+            .lean()
+        : [];
+
+      const idToDoc = new Map<string, any>();
+      for (const doc of docs) {
+        idToDoc.set(String((doc as any).pineconeId), doc);
+      }
+
+      const enrichedMatches = matches
+        .map((m) => ({
+          id: m.id,
+          score: m.score,
+          doc: idToDoc.get(m.id),
+        }))
+        .filter((m) => m.doc && m.doc.text && Array.isArray(m.doc.options) && m.doc.options.length > 0);
+
+      const result: RetrievalResult = { permutation: perm, matches: enrichedMatches };
+      retrievalCache.set(perm.id, result);
+
+      console.log(`[generateQuestionPaperv1_5] Permutation "${perm.id}" retrieved ${enrichedMatches.length} questions`);
+      return result;
+    };
+
+    // ============================================================
+    // PHASE 4: Generate question with permutation context
+    // ============================================================
+    const generateQuestion = async (
+      difficulty: "easy" | "medium" | "hard",
+      permutation: FilterPermutation,
+      inspirations: Array<{ id: string; score: number; doc: any }>,
+      avoidTexts: string[]
+    ): Promise<GeneratedItem | null> => {
+      // Filter out already used inspirations and take top 8
+      const freshInspirations = inspirations
+        .filter((insp) => !usedPineconeIds.has(String(insp.doc?.pineconeId || "")))
+        .slice(0, 8);
+
+      if (freshInspirations.length === 0) {
+        // Fallback: use all inspirations even if some were used
+        freshInspirations.push(...inspirations.slice(0, 6));
+      }
+
+      const curatedForPrompt = freshInspirations.map((insp: any, i: number) => ({
+        idx: i + 1,
+        text: insp.doc.text,
+        options: insp.doc.options,
+        correctIndex: typeof insp.doc.correctIndex === "number" ? insp.doc.correctIndex : undefined,
+        chapter: insp.doc.chapter || null,
+        topics: insp.doc.topics || [],
+        tags: insp.doc.tags || [],
+        difficulty: insp.doc.difficulty || difficulty,
+        relevanceScore: insp.score?.toFixed(3),
+      }));
+
+      const systemPrompt =
+        "You are an expert exam question setter for Indian competitive exams (JEE, NEET, Boards, etc.). " +
+        "Generate ONE high-quality, original, exam-worthy multiple-choice question (MCQ). " +
+        "The question must be unique, well-crafted, and appropriate for the specified difficulty. " +
+        "Strictly respond with a single JSON object only; no prose.";
+
+      const contextDescription = [
+        permutation.topics.length ? `Topics focus: ${permutation.topics.join(", ")}` : "",
+        permutation.tags.length ? `Tags context: ${permutation.tags.join(", ")}` : "",
+      ].filter(Boolean).join("; ");
+
+      const userPrompt = [
+        `=== Question Generation Context ===`,
+        `Permutation: ${permutation.description}`,
+        contextDescription ? `Additional context: ${contextDescription}` : "",
+        ``,
+        `Constraints:`,
+        `- Subject: ${subject}`,
+        chapter ? `- Chapter: ${chapter}` : `- Chapter: (any within subject)`,
+        `- Difficulty: ${difficulty}${overallDifficulty ? ` (paper overall: ${overallDifficulty})` : ""}`,
+        inputTags.length ? `- Preferred tags: ${inputTags.join(", ")}` : "",
+        inputTopics.length ? `- Preferred topics: ${inputTopics.join(", ")}` : "",
+        description ? `- Paper notes: ${description}` : "",
+        "",
+        "=== Retrieved Inspiration Questions (DO NOT COPY - use only as style/concept reference) ===",
+        JSON.stringify(curatedForPrompt, null, 2),
+        "",
+        avoidTexts.length > 0
+          ? `=== Already Generated Questions (AVOID similar content) ===\n${avoidTexts.slice(-15).map((t, i) => `${i + 1}. ${t.slice(0, 120)}...`).join("\n")}`
+          : "",
+        "",
+        "=== Output JSON Schema ===",
+        JSON.stringify({
+          text: "string (question stem)",
+          options: ["4-5 options as strings"],
+          correctIndex: "0-based index of correct option",
+          chapter: "string | null",
+          topics: ["relevant topic strings"],
+          tags: ["relevant tag strings"],
+          difficulty: "easy | medium | hard",
+        }, null, 2),
+        "",
+        "=== Generation Rules ===",
+        "1. Create a NOVEL question inspired by the retrieved examples, not a copy",
+        "2. Ensure the question tests genuine understanding, not just memorization",
+        "3. Options must have exactly one correct answer with plausible distractors",
+        "4. Difficulty: easy=direct application, medium=multi-step reasoning, hard=complex problem solving",
+        "5. Strictly avoid any overlap with the 'Already Generated Questions' list",
+        "6. If inspiration questions focus on specific concepts, explore related but different angles",
+      ].filter(Boolean).join("\n");
+
+      const content = await callLLM(systemPrompt, userPrompt, 0.75);
+      if (!content) return null;
+
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        try {
+          parsed = JSON.parse(extractJsonObject(content));
+        } catch {
+          return null;
+        }
+      }
+
+      const text = String(parsed?.text || "").trim();
+      const options: string[] = Array.isArray(parsed?.options)
+        ? parsed.options.map((o: any) => String(o)).filter((s: string) => s.length > 0)
+        : [];
+      const ciRaw = parsed?.correctIndex;
+      const correctIndex = typeof ciRaw === "number" && ciRaw >= 0 && ciRaw < options.length ? ciRaw : -1;
+
+      if (!text || options.length < 4 || correctIndex < 0) {
+        return null;
+      }
+
+      const contentHash = computeHash(subject, text, options);
+      if (seenContentHashes.has(contentHash) || seenTexts.has(normalize(text))) {
+        return null;
+      }
+
+      const outChapter = parsed?.chapter === null || parsed?.chapter === undefined || String(parsed?.chapter).trim() === ""
+        ? null
+        : String(parsed.chapter);
+      const outTopics: string[] = Array.isArray(parsed?.topics)
+        ? parsed.topics.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+        : [];
+      const outTags: string[] = Array.isArray(parsed?.tags)
+        ? parsed.tags.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+        : [];
+      const outDiffRaw = String(parsed?.difficulty || "").toLowerCase();
+      const outDifficulty: "easy" | "medium" | "hard" =
+        outDiffRaw === "easy" || outDiffRaw === "hard" ? (outDiffRaw as any) : "medium";
+
+      // Mark inspirations as used
+      freshInspirations.forEach((insp) => {
+        if (insp.doc?.pineconeId) usedPineconeIds.add(String(insp.doc.pineconeId));
+      });
+
+      seenContentHashes.add(contentHash);
+      seenTexts.add(normalize(text));
+
+      return {
+        text,
+        options,
+        correctIndex,
+        subject,
+        chapter: outChapter,
+        topics: outTopics,
+        tags: outTags,
+        difficulty: outDifficulty,
+        source: {
+          permutation: permutation.id,
+          curatedPineconeIds: freshInspirations.map((insp) => String(insp.doc?.pineconeId || "")),
+        },
+      };
+    };
+
+    // ============================================================
+    // MAIN ITERATION LOOP
+    // ============================================================
+    let iteration = 0;
+    let permutationIndex = 0;
+    const usedPermutationIds = new Set<string>();
+
+    while (iteration < maxIterations && generated.length < totalRequested) {
+      iteration++;
+      console.log(`[generateQuestionPaperv1_5] Iteration ${iteration}/${maxIterations}, generated: ${generated.length}/${totalRequested}`);
+
+      // Calculate how many more questions we need per difficulty
+      const remainingCounts: Record<"easy" | "medium" | "hard", number> = {
+        easy: Math.max(0, targetCounts.easy - generated.filter((g) => g.difficulty === "easy").length),
+        medium: Math.max(0, targetCounts.medium - generated.filter((g) => g.difficulty === "medium").length),
+        hard: Math.max(0, targetCounts.hard - generated.filter((g) => g.difficulty === "hard").length),
+      };
+
+      // For this iteration, process multiple permutations (one per remaining question slot)
+      const questionsThisIteration = Math.min(
+        totalRequested - generated.length,
+        Math.max(5, Math.ceil((totalRequested - generated.length) / (maxIterations - iteration + 1)))
+      );
+
+      for (let q = 0; q < questionsThisIteration && generated.length < totalRequested; q++) {
+        // Determine which difficulty we need
+        let targetDiff: "easy" | "medium" | "hard" | null = null;
+        for (const diff of difficultiesOrder) {
+          if (remainingCounts[diff] > 0) {
+            targetDiff = diff;
+            break;
+          }
+        }
+        if (!targetDiff) break;
+
+        // Find a permutation for this difficulty that hasn't been fully used
+        let selectedPermutation: FilterPermutation | null = null;
+        const diffPermutations = allPermutations.filter((p) => p.difficulty === targetDiff);
+
+        // Try to find unused permutation first
+        for (const perm of diffPermutations) {
+          if (!usedPermutationIds.has(perm.id)) {
+            selectedPermutation = perm;
+            usedPermutationIds.add(perm.id);
+            break;
+          }
+        }
+
+        // If all permutations used, cycle through them again
+        if (!selectedPermutation && diffPermutations.length > 0) {
+          const idx = permutationIndex % diffPermutations.length;
+          selectedPermutation = diffPermutations[idx] ?? null;
+          permutationIndex++;
+        }
+
+        if (!selectedPermutation) {
+          // Fallback: use broad search
+          selectedPermutation = {
+            id: `${targetDiff}-fallback-${iteration}-${q}`,
+            topics: inputTopics.slice(0, 2),
+            tags: inputTags.slice(0, 2),
+            difficulty: targetDiff,
+            description: `${targetDiff} fallback search`,
+          };
+        }
+
+        // Retrieve questions for this permutation
+        const retrieval = await retrieveForPermutation(selectedPermutation);
+        const avoidTexts = generated.map((g) => g.text);
+
+        // Generate question with up to 3 retries
+        let question: GeneratedItem | null = null;
+        for (let attempt = 0; attempt < 3 && !question; attempt++) {
+          question = await generateQuestion(
+            targetDiff,
+            selectedPermutation,
+            retrieval.matches,
+            avoidTexts
+          );
+        }
+
+        if (question) {
+          generated.push(question);
+          remainingCounts[targetDiff]--;
+          console.log(`[generateQuestionPaperv1_5] Generated question ${generated.length}/${totalRequested} (${targetDiff}) using permutation: ${selectedPermutation.id}`);
+        }
+      }
+    }
+
+    // Build summary stats
+    const permutationsUsed = [...new Set(generated.map((g) => g.source.permutation))];
+
+    res.status(200).json({
+      success: true,
+      data: generated,
+      meta: {
+        requested: { easy: easyCount, medium: mediumCount, hard: hardCount, total: totalRequested },
+        generated: {
+          total: generated.length,
+          byDifficulty: {
+            easy: generated.filter((g) => g.difficulty === "easy").length,
+            medium: generated.filter((g) => g.difficulty === "medium").length,
+            hard: generated.filter((g) => g.difficulty === "hard").length,
+          },
+        },
+        iterations: iteration,
+        permutationsAvailable: allPermutations.length,
+        permutationsUsed: permutationsUsed.length,
+        topicsDiscovered: allTopics.length,
+        tagsDiscovered: allTags.length,
+      },
+    });
+  } catch (error) {
+    console.error("Error generating question paper v1.5:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * generateQuestionPaperv2 - Advanced question paper generation with:
+ * 1. LLM-powered keyword generation for diverse vector search
+ * 2. Multi-keyword retrieval with high top-k for better coverage
+ * 3. Per-question LLM generation with unique contexts
+ * 4. Holistic paper evaluation with feedback loop
+ * 5. Iterative refinement for diversity and quality
+ */
+export const generateQuestionPaperv2 = async (req: CustomRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as {
+      subject?: string;
+      chapter?: string | null;
+      overallDifficulty?: "easy" | "medium" | "hard" | null;
+      easyCount?: number | string | null;
+      mediumCount?: number | string | null;
+      hardCount?: number | string | null;
+      tags?: string[];
+      topics?: string[];
+      description?: string | null;
+      maxIterations?: number | string | null;
+    };
+
+    const subject = String(body?.subject || "").trim();
+    if (!subject) {
+      res.status(400).json({ success: false, message: "subject is required" });
+      return;
+    }
+
+    const chapter = body?.chapter ? String(body.chapter).trim() : null;
+    const overallDifficulty = body?.overallDifficulty ? String(body.overallDifficulty).toLowerCase() as any : null;
+    const tags = Array.isArray(body?.tags) ? body.tags.map((t) => String(t)) : [];
+    const topics = Array.isArray(body?.topics) ? body.topics.map((t) => String(t)) : [];
+    const description = body?.description ? String(body.description) : "";
+    const easyCount = Math.max(parseInt(String(body?.easyCount ?? "0"), 10) || 0, 0);
+    const mediumCount = Math.max(parseInt(String(body?.mediumCount ?? "0"), 10) || 0, 0);
+    const hardCount = Math.max(parseInt(String(body?.hardCount ?? "0"), 10) || 0, 0);
+    const maxIterations = Math.min(Math.max(parseInt(String(body?.maxIterations ?? "2"), 10) || 2, 1), 5);
+
+    const targetCounts: Record<"easy" | "medium" | "hard", number> = {
+      easy: easyCount,
+      medium: mediumCount,
+      hard: hardCount,
+    };
+    const totalRequested = easyCount + mediumCount + hardCount;
+    if (totalRequested <= 0) {
+      res.status(400).json({ success: false, message: "At least one of easy/medium/hard counts must be > 0" });
+      return;
+    }
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      res.status(500).json({ success: false, message: "OPENROUTER_API_KEY not configured" });
+      return;
+    }
+
+    const headers = {
+      Authorization: `Bearer ${openrouterApiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost",
+      "X-Title": process.env.OPENROUTER_APP_NAME || "ReportCardApp",
+    };
+
+    const modelCandidates = [
+      "openai/gpt-4o-mini",
+      "anthropic/claude-3.5-sonnet",
+      "google/gemini-2.0-flash",
+    ];
+
+    const normalize = (s: string) =>
+      String(s || "")
+        .normalize("NFKC")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const computeHash = (subjectVal: string, textVal: string, optionVals: string[]) => {
+      const base = [
+        normalize(subjectVal),
+        normalize(textVal),
+        ...optionVals.map((o) => normalize(o)),
+      ].join("||");
+      return createHash("sha256").update(base).digest("hex");
+    };
+
+    // Helper to call LLM with retry across models
+    const callLLM = async (systemPrompt: string, userPrompt: string, temperature = 0.7): Promise<string> => {
+      for (const model of modelCandidates) {
+        const payload = {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature,
+          max_tokens: 2000,
+        };
+        try {
+          const resp = await axios.post("https://openrouter.ai/api/v1/chat/completions", payload, { headers });
+          const content = String(resp?.data?.choices?.[0]?.message?.content ?? "").trim();
+          if (content) return content;
+        } catch (err) {
+          continue;
+        }
+      }
+      return "";
+    };
+
+    type GeneratedItem = {
+      text: string;
+      options: string[];
+      correctIndex: number;
+      subject: string;
+      chapter?: string | null;
+      topics?: string[];
+      tags?: string[];
+      difficulty: "easy" | "medium" | "hard";
+      source: {
+        keyword: string;
+        curatedPineconeIds: string[];
+      };
+    };
+
+    type EvaluationResult = {
+      overallScore: number;
+      coverageScore: number;
+      diversityScore: number;
+      difficultyBalanceScore: number;
+      suggestions: string[];
+      weakAreas: string[];
+      missingTopics: string[];
+    };
+
+    // Build the generation schedule
+    const difficultiesOrder: Array<"easy" | "medium" | "hard"> = ["easy", "medium", "hard"];
+    const schedule: Array<{ difficulty: "easy" | "medium" | "hard"; index: number }> = [];
+    for (const d of difficultiesOrder) {
+      for (let i = 0; i < targetCounts[d]; i++) {
+        schedule.push({ difficulty: d, index: schedule.length });
+      }
+    }
+
+    let generated: GeneratedItem[] = [];
+    const seenContentHashes = new Set<string>();
+    const seenTexts = new Set<string>();
+    const usedPineconeIds = new Set<string>();
+    let lastEvaluation: EvaluationResult | null = null;
+
+    // ============================================================
+    // PHASE 1: Generate diverse keywords for vector search
+    // ============================================================
+    const generateKeywords = async (
+      evaluationFeedback: EvaluationResult | null,
+      existingKeywords: string[],
+      generatedQuestions: GeneratedItem[]
+    ): Promise<string[]> => {
+      const keywordSystemPrompt =
+        "You are an expert educational content specialist for Indian competitive exams. " +
+        "Generate diverse, specific search keywords/phrases that can be used to find relevant questions in a vector database. " +
+        "Return ONLY a JSON array of strings. No prose.";
+
+      const contextParts = [
+        `Subject: ${subject}`,
+        chapter ? `Chapter: ${chapter}` : "",
+        topics.length ? `Focus topics: ${topics.join(", ")}` : "",
+        tags.length ? `Relevant tags: ${tags.join(", ")}` : "",
+        description ? `Paper description: ${description}` : "",
+        `Total questions needed: ${totalRequested} (Easy: ${easyCount}, Medium: ${mediumCount}, Hard: ${hardCount})`,
+      ].filter(Boolean);
+
+      let feedbackContext = "";
+      if (evaluationFeedback) {
+        feedbackContext = [
+          "\n--- Evaluation Feedback from Previous Iteration ---",
+          `Overall Score: ${evaluationFeedback.overallScore}/10`,
+          `Diversity Score: ${evaluationFeedback.diversityScore}/10`,
+          `Coverage Score: ${evaluationFeedback.coverageScore}/10`,
+          evaluationFeedback.weakAreas.length ? `Weak Areas: ${evaluationFeedback.weakAreas.join(", ")}` : "",
+          evaluationFeedback.missingTopics.length ? `Missing Topics: ${evaluationFeedback.missingTopics.join(", ")}` : "",
+          evaluationFeedback.suggestions.length ? `Suggestions: ${evaluationFeedback.suggestions.join("; ")}` : "",
+        ].filter(Boolean).join("\n");
+      }
+
+      const existingKeywordsContext = existingKeywords.length
+        ? `\nAlready used keywords (generate DIFFERENT ones): ${existingKeywords.join(", ")}`
+        : "";
+
+      const generatedQuestionsContext = generatedQuestions.length
+        ? `\nAlready generated ${generatedQuestions.length} questions covering: ${[...new Set(generatedQuestions.flatMap(q => q.topics || []))].slice(0, 10).join(", ")}`
+        : "";
+
+      const keywordUserPrompt = [
+        "Generate 8-12 diverse, specific search keywords/phrases for finding exam questions.",
+        "",
+        contextParts.join("\n"),
+        feedbackContext,
+        existingKeywordsContext,
+        generatedQuestionsContext,
+        "",
+        "Requirements:",
+        "- Each keyword should target a different concept, formula, application, or subtopic",
+        "- Include a mix of: theoretical concepts, numerical problems, application-based, conceptual",
+        "- For each difficulty level, think about what distinguishes easy/medium/hard questions",
+        "- Keywords should be specific enough to retrieve focused results",
+        "- Avoid generic terms; be precise about the concept or problem type",
+        "",
+        "Output: JSON array of keyword strings only",
+        'Example: ["Projectile motion range formula", "Energy conservation spring problems", "Friction inclined plane numerical", ...]',
+      ].join("\n");
+
+      const content = await callLLM(keywordSystemPrompt, keywordUserPrompt, 0.8);
+      if (!content) return [];
+
+      try {
+        const parsed = JSON.parse(extractJsonArray(content));
+        if (Array.isArray(parsed)) {
+          return parsed.map((k: any) => String(k).trim()).filter((k: string) => k.length > 0);
+        }
+      } catch {
+        // Try to extract array from text
+        const match = content.match(/\[[\s\S]*\]/);
+        if (match) {
+          try {
+            const arr = JSON.parse(match[0]);
+            if (Array.isArray(arr)) {
+              return arr.map((k: any) => String(k).trim()).filter((k: string) => k.length > 0);
+            }
+          } catch {}
+        }
+      }
+      return [];
+    };
+
+    // ============================================================
+    // PHASE 2: Multi-keyword vector retrieval with caching
+    // ============================================================
+    type RetrievalCache = Map<string, {
+      embedding: number[];
+      matches: Array<{ id: string; score: number; doc: any }>;
+    }>;
+
+    const retrieveForKeywords = async (
+      keywords: string[],
+      cache: RetrievalCache,
+      difficulty?: "easy" | "medium" | "hard"
+    ): Promise<RetrievalCache> => {
+      for (const keyword of keywords) {
+        const cacheKey = `${keyword}::${difficulty || "all"}`;
+        if (cache.has(cacheKey)) continue;
+
+        // Build embedding query that incorporates the keyword + context
+        const embeddingText = [
+          `Subject: ${subject}`,
+          chapter ? `Chapter: ${chapter}` : "",
+          `Search query: ${keyword}`,
+          difficulty ? `Difficulty: ${difficulty}` : "",
+          "Type: multiple-choice question for competitive exam",
+        ].filter(Boolean).join("\n");
+
+        const embedding = await getEmbeddingForText(embeddingText);
+
+        // Build Pinecone filter
+        const pineconeFilter: Record<string, unknown> = { subject };
+        if (chapter) pineconeFilter.chapter = chapter;
+        if (difficulty) pineconeFilter.difficulty = difficulty;
+
+        // High top-k for better coverage
+        const matches = await querySimilarInPinecone({
+          values: embedding,
+          topK: 50, // High retrieval count
+          filter: pineconeFilter,
+          includeMetadata: true,
+        });
+
+        const ids = matches.map((m) => m.id).filter(Boolean);
+        const docs = ids.length
+          ? await Question.find({ pineconeId: { $in: ids } })
+              .select("text options correctIndex subject chapter topics tags difficulty pineconeId")
+              .lean()
+          : [];
+
+        const idToDoc = new Map<string, any>();
+        for (const doc of docs) {
+          idToDoc.set(String(doc.pineconeId), doc);
+        }
+
+        const enrichedMatches = matches
+          .map((m) => ({
+            id: m.id,
+            score: m.score,
+            doc: idToDoc.get(m.id),
+          }))
+          .filter((m) => m.doc && m.doc.text && Array.isArray(m.doc.options) && m.doc.options.length > 0);
+
+        cache.set(cacheKey, { embedding, matches: enrichedMatches });
+      }
+
+      return cache;
+    };
+
+    // ============================================================
+    // PHASE 3: Generate single question with keyword-specific context
+    // ============================================================
+    const generateQuestion = async (
+      difficulty: "easy" | "medium" | "hard",
+      keyword: string,
+      inspirations: any[],
+      avoidTexts: string[],
+      evaluationFeedback: EvaluationResult | null
+    ): Promise<GeneratedItem | null> => {
+      // Filter out already used inspirations
+      const freshInspirations = inspirations
+        .filter((insp) => !usedPineconeIds.has(String(insp.doc?.pineconeId || "")))
+        .slice(0, 8);
+
+      const curatedForPrompt = freshInspirations.map((insp: any, i: number) => ({
+        idx: i + 1,
+        text: insp.doc.text,
+        options: insp.doc.options,
+        correctIndex: typeof insp.doc.correctIndex === "number" ? insp.doc.correctIndex : undefined,
+        chapter: insp.doc.chapter || null,
+        topics: insp.doc.topics || [],
+        difficulty: insp.doc.difficulty || difficulty,
+        relevanceScore: insp.score,
+      }));
+
+      let feedbackGuidance = "";
+      if (evaluationFeedback) {
+        const guidanceParts = [];
+        if (evaluationFeedback.missingTopics.length) {
+          guidanceParts.push(`Try to cover one of these missing topics: ${evaluationFeedback.missingTopics.join(", ")}`);
+        }
+        if (evaluationFeedback.weakAreas.length) {
+          guidanceParts.push(`Strengthen these areas: ${evaluationFeedback.weakAreas.join(", ")}`);
+        }
+        if (evaluationFeedback.suggestions.length) {
+          guidanceParts.push(`Reviewer suggestions: ${evaluationFeedback.suggestions.slice(0, 2).join("; ")}`);
+        }
+        if (guidanceParts.length) {
+          feedbackGuidance = `\n\n--- Evaluation Guidance ---\n${guidanceParts.join("\n")}`;
+        }
+      }
+
+      const systemPrompt =
+        "You are an expert exam question setter for Indian competitive exams (JEE, NEET, etc.). " +
+        "Generate ONE high-quality, original, exam-worthy multiple-choice question (MCQ). " +
+        "The question must be unique, well-crafted, and appropriate for the specified difficulty. " +
+        "Strictly respond with a single JSON object only; no prose.";
+
+      const userPrompt = [
+        `=== Question Generation Context ===`,
+        `Keyword/Concept Focus: ${keyword}`,
+        ``,
+        `Constraints:`,
+        `- Subject: ${subject}`,
+        chapter ? `- Chapter: ${chapter}` : `- Chapter: (any within subject)`,
+        `- Difficulty: ${difficulty}${overallDifficulty ? ` (paper overall: ${overallDifficulty})` : ""}`,
+        tags.length ? `- Tags (include when natural): ${tags.join(", ")}` : "",
+        topics.length ? `- Topics focus: ${topics.join(", ")}` : "",
+        description ? `- Paper notes: ${description}` : "",
+        feedbackGuidance,
+        "",
+        "=== Retrieved Inspiration Questions (DO NOT COPY - use only as style/concept reference) ===",
+        JSON.stringify(curatedForPrompt, null, 2),
+        "",
+        avoidTexts.length > 0
+          ? `=== Already Generated Questions (AVOID similar content) ===\n${avoidTexts.slice(-10).map((t, i) => `${i + 1}. ${t.slice(0, 150)}...`).join("\n")}`
+          : "",
+        "",
+        "=== Output JSON Schema ===",
+        JSON.stringify({
+          text: "string (question stem)",
+          options: ["4-5 options as strings"],
+          correctIndex: "0-based index of correct option",
+          chapter: "string | null",
+          topics: ["relevant topic strings"],
+          tags: ["relevant tag strings"],
+          difficulty: "easy | medium | hard",
+        }, null, 2),
+        "",
+        "=== Generation Rules ===",
+        "1. Create a NOVEL question inspired by the concept/keyword, not a copy of inspirations",
+        "2. Ensure the question tests genuine understanding, not just memorization",
+        "3. Options must have exactly one correct answer with plausible distractors",
+        "4. Difficulty should match: easy=direct application, medium=multi-step, hard=complex reasoning",
+        "5. Avoid any overlap with the 'Already Generated Questions' list",
+      ].filter(Boolean).join("\n");
+
+      const content = await callLLM(systemPrompt, userPrompt, 0.75);
+      if (!content) return null;
+
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        try {
+          parsed = JSON.parse(extractJsonObject(content));
+        } catch {
+          return null;
+        }
+      }
+
+      const text = String(parsed?.text || "").trim();
+      const options: string[] = Array.isArray(parsed?.options)
+        ? parsed.options.map((o: any) => String(o)).filter((s: string) => s.length > 0)
+        : [];
+      const ciRaw = parsed?.correctIndex;
+      const correctIndex = typeof ciRaw === "number" && ciRaw >= 0 && ciRaw < options.length ? ciRaw : -1;
+
+      if (!text || options.length < 4 || correctIndex < 0) {
+        return null;
+      }
+
+      const contentHash = computeHash(subject, text, options);
+      if (seenContentHashes.has(contentHash) || seenTexts.has(normalize(text))) {
+        return null;
+      }
+
+      const outChapter = parsed?.chapter === null || parsed?.chapter === undefined || String(parsed?.chapter).trim() === ""
+        ? null
+        : String(parsed.chapter);
+      const outTopics: string[] = Array.isArray(parsed?.topics)
+        ? parsed.topics.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+        : [];
+      const outTags: string[] = Array.isArray(parsed?.tags)
+        ? parsed.tags.map((t: any) => String(t)).filter((s: string) => s.length > 0)
+        : [];
+      const outDiffRaw = String(parsed?.difficulty || "").toLowerCase();
+      const outDifficulty: "easy" | "medium" | "hard" =
+        outDiffRaw === "easy" || outDiffRaw === "hard" ? (outDiffRaw as any) : "medium";
+
+      // Mark inspirations as used
+      freshInspirations.forEach((insp) => {
+        if (insp.doc?.pineconeId) usedPineconeIds.add(String(insp.doc.pineconeId));
+      });
+
+      seenContentHashes.add(contentHash);
+      seenTexts.add(normalize(text));
+
+      return {
+        text,
+        options,
+        correctIndex,
+        subject,
+        chapter: outChapter,
+        topics: outTopics,
+        tags: outTags,
+        difficulty: outDifficulty,
+        source: {
+          keyword,
+          curatedPineconeIds: freshInspirations.map((insp) => String(insp.doc?.pineconeId || "")),
+        },
+      };
+    };
+
+    // ============================================================
+    // PHASE 4: Evaluate entire paper
+    // ============================================================
+    const evaluatePaper = async (questions: GeneratedItem[]): Promise<EvaluationResult> => {
+      const evalSystemPrompt =
+        "You are an expert exam paper reviewer for Indian competitive exams. " +
+        "Evaluate the given question paper for quality, coverage, diversity, and difficulty balance. " +
+        "Return ONLY a JSON object with your evaluation. No prose.";
+
+      const questionsForEval = questions.map((q, i) => ({
+        index: i + 1,
+        text: q.text.slice(0, 200) + (q.text.length > 200 ? "..." : ""),
+        difficulty: q.difficulty,
+        topics: q.topics,
+        chapter: q.chapter,
+      }));
+
+      const evalUserPrompt = [
+        "=== Question Paper to Evaluate ===",
+        `Subject: ${subject}`,
+        chapter ? `Chapter: ${chapter}` : "",
+        `Target Distribution: Easy(${easyCount}), Medium(${mediumCount}), Hard(${hardCount})`,
+        topics.length ? `Expected Topics: ${topics.join(", ")}` : "",
+        "",
+        "Questions:",
+        JSON.stringify(questionsForEval, null, 2),
+        "",
+        "=== Evaluation Schema ===",
+        JSON.stringify({
+          overallScore: "1-10 overall quality score",
+          coverageScore: "1-10 topic/concept coverage",
+          diversityScore: "1-10 question diversity (concepts, styles, problem types)",
+          difficultyBalanceScore: "1-10 appropriate difficulty distribution",
+          suggestions: ["array of improvement suggestions"],
+          weakAreas: ["array of weak areas in the paper"],
+          missingTopics: ["array of important topics not covered"],
+        }, null, 2),
+        "",
+        "Evaluate critically. Identify gaps and suggest specific improvements.",
+      ].filter(Boolean).join("\n");
+
+      const content = await callLLM(evalSystemPrompt, evalUserPrompt, 0.5);
+
+      const defaultEval: EvaluationResult = {
+        overallScore: 7,
+        coverageScore: 7,
+        diversityScore: 7,
+        difficultyBalanceScore: 7,
+        suggestions: [],
+        weakAreas: [],
+        missingTopics: [],
+      };
+
+      if (!content) return defaultEval;
+
+      try {
+        const parsed = JSON.parse(extractJsonObject(content));
+        return {
+          overallScore: typeof parsed.overallScore === "number" ? parsed.overallScore : 7,
+          coverageScore: typeof parsed.coverageScore === "number" ? parsed.coverageScore : 7,
+          diversityScore: typeof parsed.diversityScore === "number" ? parsed.diversityScore : 7,
+          difficultyBalanceScore: typeof parsed.difficultyBalanceScore === "number" ? parsed.difficultyBalanceScore : 7,
+          suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map((s: any) => String(s)) : [],
+          weakAreas: Array.isArray(parsed.weakAreas) ? parsed.weakAreas.map((s: any) => String(s)) : [],
+          missingTopics: Array.isArray(parsed.missingTopics) ? parsed.missingTopics.map((s: any) => String(s)) : [],
+        };
+      } catch {
+        return defaultEval;
+      }
+    };
+
+    // ============================================================
+    // MAIN ITERATION LOOP
+    // ============================================================
+    const retrievalCache: RetrievalCache = new Map();
+    const allUsedKeywords: string[] = [];
+    let iteration = 0;
+
+    while (iteration < maxIterations && generated.length < totalRequested) {
+      iteration++;
+      console.log(`[generateQuestionPaperv2] Iteration ${iteration}/${maxIterations}, generated: ${generated.length}/${totalRequested}`);
+
+      // Phase 1: Generate keywords with feedback
+      const newKeywords = await generateKeywords(lastEvaluation, allUsedKeywords, generated);
+      if (newKeywords.length === 0) {
+        console.log("[generateQuestionPaperv2] No new keywords generated, breaking");
+        break;
+      }
+      allUsedKeywords.push(...newKeywords);
+
+      // Phase 2: Retrieve for all keywords (per difficulty)
+      for (const diff of difficultiesOrder) {
+        if (targetCounts[diff] > 0) {
+          await retrieveForKeywords(newKeywords, retrievalCache, diff);
+        }
+      }
+
+      // Phase 3: Generate questions for remaining slots
+      const remainingSchedule = schedule.filter((s) => {
+        const countForDiff = generated.filter((g) => g.difficulty === s.difficulty).length;
+        return countForDiff < targetCounts[s.difficulty];
+      });
+
+      for (let i = 0; i < remainingSchedule.length && generated.length < totalRequested; i++) {
+        const slot = remainingSchedule[i];
+        if (!slot) continue;
+        const { difficulty } = slot;
+
+        // Round-robin through keywords for diversity
+        const keywordIndex = (generated.length + i) % newKeywords.length;
+        const keyword = newKeywords[keywordIndex];
+        if (!keyword) continue;
+        
+        const cacheKey = `${keyword}::${difficulty}`;
+
+        const cached = retrievalCache.get(cacheKey);
+        if (!cached || cached.matches.length === 0) {
+          // Fallback: try without difficulty filter
+          const fallbackKey = `${keyword}::all`;
+          if (!retrievalCache.has(fallbackKey)) {
+            await retrieveForKeywords([keyword], retrievalCache);
+          }
+        }
+
+        const finalCached = retrievalCache.get(cacheKey) || retrievalCache.get(`${keyword}::all`);
+        const inspirations = finalCached?.matches || [];
+
+        const avoidTexts = generated.map((g) => g.text);
+
+        // Try to generate with up to 2 retries
+        let question: GeneratedItem | null = null;
+        for (let attempt = 0; attempt < 3 && !question; attempt++) {
+          question = await generateQuestion(
+            difficulty,
+            keyword,
+            inspirations,
+            avoidTexts,
+            lastEvaluation
+          );
+        }
+
+        if (question) {
+          generated.push(question);
+        }
+      }
+
+      // Phase 4: Evaluate if we have questions
+      if (generated.length > 0) {
+        lastEvaluation = await evaluatePaper(generated);
+        console.log(`[generateQuestionPaperv2] Evaluation: overall=${lastEvaluation.overallScore}, diversity=${lastEvaluation.diversityScore}`);
+
+        // If evaluation is good enough and we have all questions, break early
+        if (
+          generated.length >= totalRequested &&
+          lastEvaluation.overallScore >= 7 &&
+          lastEvaluation.diversityScore >= 6
+        ) {
+          break;
+        }
+      }
+    }
+
+    // Final response
+    res.status(200).json({
+      success: true,
+      data: generated,
+      meta: {
+        requested: { easy: easyCount, medium: mediumCount, hard: hardCount, total: totalRequested },
+        generated: {
+          total: generated.length,
+          byDifficulty: {
+            easy: generated.filter((g) => g.difficulty === "easy").length,
+            medium: generated.filter((g) => g.difficulty === "medium").length,
+            hard: generated.filter((g) => g.difficulty === "hard").length,
+          },
+        },
+        iterations: iteration,
+        keywordsUsed: allUsedKeywords,
+        evaluation: lastEvaluation,
+      },
+    });
+  } catch (error) {
+    console.error("Error generating question paper v2:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
 
 
