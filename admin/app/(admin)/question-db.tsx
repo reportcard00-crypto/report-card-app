@@ -1,8 +1,35 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable } from "react-native";
-import { uploadPdfDirect, processQuestionPdfStream, getUploadHistory, getSessionQuestions, type UploadSession, type StreamEvent } from "@/api/admin";
+import { uploadPdfDirect, processQuestionPdfStream, getUploadHistory, getSessionQuestions, getActiveSessions, getSessionStatus, type UploadSession, type StreamEvent } from "@/api/admin";
 import { useQuestionEditorStore, type QuestionEditorState, SUBJECTS } from "@/store/questionEditor";
 import { router } from "expo-router";
+
+// Helper to store/retrieve active session from localStorage
+const ACTIVE_SESSION_KEY = "questiondb_active_session";
+
+const saveActiveSession = (sessionId: string, subject: string) => {
+  if (typeof window !== "undefined" && window.localStorage) {
+    localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ sessionId, subject, timestamp: Date.now() }));
+  }
+};
+
+const getStoredActiveSession = (): { sessionId: string; subject: string; timestamp: number } | null => {
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {}
+  }
+  return null;
+};
+
+const clearActiveSession = () => {
+  if (typeof window !== "undefined" && window.localStorage) {
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+  }
+};
 
 type StreamStatus = {
   message: string;
@@ -25,6 +52,8 @@ const QuestionDB = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [uploadHistory, setUploadHistory] = useState<UploadSession[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [resumedSession, setResumedSession] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Store access
   const questions = useQuestionEditorStore((s: QuestionEditorState) => s.questions);
@@ -36,6 +65,7 @@ const QuestionDB = () => {
   const addStreamedQuestion = useQuestionEditorStore((s: QuestionEditorState) => s.addStreamedQuestion);
   const setStreamSessionId = useQuestionEditorStore((s: QuestionEditorState) => s.setStreamSessionId);
   const loadFromBackendResult = useQuestionEditorStore((s: QuestionEditorState) => s.loadFromBackendResult);
+  const setQuestions = useQuestionEditorStore((s: QuestionEditorState) => s.setQuestions);
 
   const canSubmit = useMemo(() => {
     const sp = parseInt(startPage || "1", 10);
@@ -65,9 +95,151 @@ const QuestionDB = () => {
     }
   }, []);
 
+  // Poll for session updates (when we have an active session but no SSE connection)
+  const startPolling = useCallback((sessionId: string) => {
+    // Clear any existing polling
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+
+    const poll = async () => {
+      try {
+        const statusResp = await getSessionStatus(sessionId);
+        const status = statusResp.data;
+        
+        if (status.status === "completed" || status.status === "failed") {
+          // Session finished, stop polling
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsStreaming(false);
+          clearActiveSession();
+          
+          if (status.status === "completed") {
+            setStreamStatus({
+              message: `Done! ${status.totalQuestionsExtracted} questions extracted`,
+              step: "complete",
+              questionsExtracted: status.totalQuestionsExtracted,
+            });
+            
+            // Load the final questions
+            const questionsResp = await getSessionQuestions(sessionId);
+            if (questionsResp.success && questionsResp.data.questions.length > 0) {
+              const transformed = {
+                data: questionsResp.data.questions.map((q: any) => ({
+                  question: q.text,
+                  options: q.options,
+                  correctIndex: q.correctIndex,
+                  image: q.image,
+                })),
+              };
+              loadFromBackendResult(transformed);
+            }
+          } else {
+            setError(status.errorMessage || "Processing failed");
+            setStreamStatus(null);
+          }
+          
+          fetchHistory();
+        } else {
+          // Still processing, fetch current questions
+          const questionsResp = await getSessionQuestions(sessionId);
+          if (questionsResp.success) {
+            const qCount = questionsResp.data.questions.length;
+            setStreamStatus(prev => ({
+              ...prev!,
+              message: `Processing... ${qCount} questions extracted so far`,
+              step: "polling",
+              questionsExtracted: qCount,
+            }));
+            
+            // Update questions in store
+            if (questionsResp.data.questions.length > 0) {
+              const transformed = {
+                data: questionsResp.data.questions.map((q: any) => ({
+                  question: q.text,
+                  options: q.options,
+                  correctIndex: q.correctIndex,
+                  image: q.image,
+                })),
+              };
+              loadFromBackendResult(transformed);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    };
+
+    // Poll immediately, then every 3 seconds
+    poll();
+    pollIntervalRef.current = setInterval(poll, 3000);
+  }, [setIsStreaming, loadFromBackendResult, fetchHistory]);
+
+  // Check for active sessions on mount
   useEffect(() => {
+    const checkActiveSessions = async () => {
+      try {
+        // First check localStorage for a session we started
+        const storedSession = getStoredActiveSession();
+        
+        // Also check backend for any processing sessions
+        const resp = await getActiveSessions();
+        
+        if (resp.success && resp.data.length > 0) {
+          // Found active session(s), resume the first one
+          const activeSession = resp.data[0];
+          console.log("Found active session:", activeSession);
+          
+          setResumedSession(activeSession.id);
+          setIsStreaming(true);
+          setStreamSessionId(activeSession.id);
+          setSelectedSubject(activeSession.subject);
+          
+          setStreamStatus({
+            message: `Resuming... ${activeSession.totalQuestionsExtracted} questions extracted`,
+            step: "resumed",
+            questionsExtracted: activeSession.totalQuestionsExtracted,
+          });
+          
+          // Load existing questions
+          if (activeSession.questions && activeSession.questions.length > 0) {
+            const transformed = {
+              data: activeSession.questions.map((q: any) => ({
+                question: q.text,
+                options: q.options,
+                correctIndex: q.correctIndex,
+                image: q.image,
+              })),
+            };
+            loadFromBackendResult(transformed);
+          }
+          
+          // Start polling for updates
+          startPolling(activeSession.id);
+        } else if (storedSession) {
+          // No active session but we have a stored one - it might have completed
+          // Clear it and refresh history
+          clearActiveSession();
+          fetchHistory();
+        }
+      } catch (e) {
+        console.error("Error checking active sessions:", e);
+      }
+    };
+
+    checkActiveSessions();
     fetchHistory();
-  }, [fetchHistory]);
+
+    // Cleanup polling on unmount
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);  // Empty deps - only run on mount
 
   // Load questions from a history session
   const loadSessionQuestions = async (sessionId: string) => {
@@ -121,6 +293,7 @@ const QuestionDB = () => {
           switch (event.type) {
             case "session_started":
               setStreamSessionId(event.sessionId);
+              saveActiveSession(event.sessionId, selectedSubject!);
               setStreamStatus({ 
                 message: `Processing ${event.fileName}`, 
                 step: "started",
@@ -180,6 +353,8 @@ const QuestionDB = () => {
                 questionsExtracted: event.totalQuestions
               });
               setIsStreaming(false);
+              clearActiveSession();
+              setResumedSession(null);
               fetchHistory(); // Refresh history
               break;
               
@@ -190,6 +365,8 @@ const QuestionDB = () => {
             case "error":
               setError(event.message + (event.details ? `: ${event.details}` : ""));
               setIsStreaming(false);
+              clearActiveSession();
+              setResumedSession(null);
               break;
           }
         },
@@ -444,25 +621,31 @@ const QuestionDB = () => {
         {/* Streaming Progress */}
         {(isStreaming || streamStatus) && (
           <View style={{ 
-            backgroundColor: streamStatus?.step === "complete" ? "#ecfdf5" : "#f0f4ff", 
+            backgroundColor: streamStatus?.step === "complete" ? "#ecfdf5" : streamStatus?.step === "resumed" || streamStatus?.step === "polling" ? "#fef3c7" : "#f0f4ff", 
             borderRadius: 12, 
             padding: 16, 
             gap: 14,
             borderWidth: 1,
-            borderColor: streamStatus?.step === "complete" ? "#a7f3d0" : "#c7d2fe",
+            borderColor: streamStatus?.step === "complete" ? "#a7f3d0" : streamStatus?.step === "resumed" || streamStatus?.step === "polling" ? "#fcd34d" : "#c7d2fe",
           }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-              {isStreaming && <ActivityIndicator size="small" color="#4361ee" />}
+              {isStreaming && <ActivityIndicator size="small" color={streamStatus?.step === "resumed" || streamStatus?.step === "polling" ? "#d97706" : "#4361ee"} />}
               {streamStatus?.step === "complete" && (
                 <Text style={{ fontSize: 18 }}>✓</Text>
               )}
-              <Text style={{ 
-                fontWeight: "600", 
-                color: streamStatus?.step === "complete" ? "#059669" : "#4361ee",
-                flex: 1
-              }}>
-                {streamStatus?.message || "Processing..."}
-              </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ 
+                  fontWeight: "600", 
+                  color: streamStatus?.step === "complete" ? "#059669" : streamStatus?.step === "resumed" || streamStatus?.step === "polling" ? "#d97706" : "#4361ee",
+                }}>
+                  {streamStatus?.message || "Processing..."}
+                </Text>
+                {(streamStatus?.step === "resumed" || streamStatus?.step === "polling") && (
+                  <Text style={{ fontSize: 12, color: "#92400e", marginTop: 2 }}>
+                    📡 Reconnected - polling for updates every 3s
+                  </Text>
+                )}
+              </View>
             </View>
             
             {/* Page Progress Details */}

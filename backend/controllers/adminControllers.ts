@@ -973,6 +973,7 @@ export const getSessionQuestions = async (req: CustomRequest, res: Response) => 
           startPage: session.startPage,
           numPages: session.numPages,
           status: session.status,
+          totalQuestionsExtracted: session.totalQuestionsExtracted,
           createdAt: session.createdAt,
           completedAt: session.completedAt,
         },
@@ -981,6 +982,88 @@ export const getSessionQuestions = async (req: CustomRequest, res: Response) => 
     });
   } catch (error) {
     console.error("Error fetching session questions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Get status of a specific session (lightweight, for polling)
+export const getSessionStatus = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { sessionId } = req.params;
+    
+    const session = await UploadSession.findOne({ 
+      _id: sessionId, 
+      createdBy: currentUser._id 
+    }).select("fileName subject startPage numPages totalQuestionsExtracted status createdAt completedAt errorMessage");
+
+    if (!session) {
+      res.status(404).json({ success: false, message: "Session not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        id: session._id,
+        fileName: session.fileName,
+        subject: session.subject,
+        startPage: session.startPage,
+        numPages: session.numPages,
+        totalQuestionsExtracted: session.totalQuestionsExtracted,
+        status: session.status,
+        errorMessage: session.errorMessage,
+        createdAt: session.createdAt,
+        completedAt: session.completedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching session status:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Get any active (processing) sessions for the current user
+export const getActiveSessions = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const activeSessions = await UploadSession.find({ 
+      createdBy: currentUser._id,
+      status: "processing"
+    })
+      .sort({ createdAt: -1 })
+      .select("fileName subject startPage numPages totalQuestionsExtracted status createdAt")
+      .populate({
+        path: "questionIds",
+        select: "text options correctIndex image sourcePage",
+      });
+
+    res.status(200).json({
+      success: true,
+      data: activeSessions.map(session => ({
+        id: session._id,
+        fileName: session.fileName,
+        subject: session.subject,
+        startPage: session.startPage,
+        numPages: session.numPages,
+        totalQuestionsExtracted: session.totalQuestionsExtracted,
+        status: session.status,
+        createdAt: session.createdAt,
+        questions: session.questionIds,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching active sessions:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

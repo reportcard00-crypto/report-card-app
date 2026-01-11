@@ -64,6 +64,7 @@ export async function getSessionQuestions(sessionId: string) {
         startPage: number;
         numPages: number;
         status: string;
+        totalQuestionsExtracted: number;
         createdAt: string;
         completedAt?: string;
       };
@@ -82,6 +83,52 @@ export async function getSessionQuestions(sessionId: string) {
         sourcePage?: number;
       }>;
     };
+  };
+}
+
+// Get session status (lightweight, for polling)
+export async function getSessionStatus(sessionId: string) {
+  const resp = await apiClient.get(`/api/admin/upload-history/${sessionId}/status`);
+  return resp.data as {
+    success: boolean;
+    data: {
+      id: string;
+      fileName: string;
+      subject: string;
+      startPage: number;
+      numPages: number;
+      totalQuestionsExtracted: number;
+      status: "processing" | "completed" | "failed";
+      errorMessage?: string;
+      createdAt: string;
+      completedAt?: string;
+    };
+  };
+}
+
+// Get any active (processing) sessions
+export async function getActiveSessions() {
+  const resp = await apiClient.get(`/api/admin/active-sessions`);
+  return resp.data as {
+    success: boolean;
+    data: Array<{
+      id: string;
+      fileName: string;
+      subject: string;
+      startPage: number;
+      numPages: number;
+      totalQuestionsExtracted: number;
+      status: string;
+      createdAt: string;
+      questions: Array<{
+        _id: string;
+        text: string;
+        options: string[];
+        correctIndex?: number;
+        image?: string;
+        sourcePage?: number;
+      }>;
+    }>;
   };
 }
 

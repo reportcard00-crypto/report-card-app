@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listUsers, updateUserRole, uploadQuestionPdf, uploadQuestionPdfStream, getUploadHistory, getSessionQuestions, generateQuestionMetadata, saveQuestionsBatch, generateQuestionPaper, generateQuestionPaperv1_5, generateQuestionPaperv2 } from "../controllers/adminControllers";
+import { listUsers, updateUserRole, uploadQuestionPdf, uploadQuestionPdfStream, getUploadHistory, getSessionQuestions, getSessionStatus, getActiveSessions, generateQuestionMetadata, saveQuestionsBatch, generateQuestionPaper, generateQuestionPaperv1_5, generateQuestionPaperv2 } from "../controllers/adminControllers";
 import { isAuthenticated, isAdmin } from "../middlewares/auth";
 
 const adminRouter = Router();
@@ -10,6 +10,8 @@ adminRouter.post("/question-pdfs/process", isAuthenticated, isAdmin, uploadQuest
 adminRouter.post("/question-pdfs/process-stream", isAuthenticated, isAdmin, uploadQuestionPdfStream);
 adminRouter.get("/upload-history", isAuthenticated, isAdmin, getUploadHistory);
 adminRouter.get("/upload-history/:sessionId/questions", isAuthenticated, isAdmin, getSessionQuestions);
+adminRouter.get("/upload-history/:sessionId/status", isAuthenticated, isAdmin, getSessionStatus);
+adminRouter.get("/active-sessions", isAuthenticated, isAdmin, getActiveSessions);
 adminRouter.post("/questions/auto-metadata", isAuthenticated, isAdmin, generateQuestionMetadata);
 adminRouter.post("/questions/batch", isAuthenticated, isAdmin, saveQuestionsBatch);
 adminRouter.post("/papers/generate", isAuthenticated, isAdmin, generateQuestionPaper);
