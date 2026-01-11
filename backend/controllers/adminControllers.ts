@@ -8,6 +8,7 @@ import type { CustomRequest } from "../types";
 import { uploadBufferToR2 } from "../utils/fileupload";
 import Question from "../models/questionModel";
 import UploadSession from "../models/uploadSessionModel";
+import QuestionPaper from "../models/questionPaperModel";
 import { getEmbeddingForText, upsertVectorsToPinecone, querySimilarInPinecone } from "../utils/vector";
 import { v4 as uuidv4 } from "uuid";
 import { createHash } from "crypto";
@@ -2924,6 +2925,483 @@ export const generateQuestionPaperv2 = async (req: CustomRequest, res: Response)
     });
   } catch (error) {
     console.error("Error generating question paper v2:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// ============================================================
+// Question Paper CRUD Operations (for history/editor feature)
+// ============================================================
+
+export const createQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const {
+      title,
+      description,
+      subject,
+      chapter,
+      overallDifficulty,
+      tags,
+      topics,
+      modelVersion,
+      requestedCounts,
+      questions,
+      generationMeta,
+      status,
+    } = req.body || {};
+
+    if (!title || !subject || !Array.isArray(questions) || questions.length === 0) {
+      res.status(400).json({
+        success: false,
+        message: "title, subject, and at least one question are required",
+      });
+      return;
+    }
+
+    const paper = await QuestionPaper.create({
+      title: String(title).trim(),
+      description: description ? String(description).trim() : undefined,
+      subject: String(subject).trim(),
+      chapter: chapter ? String(chapter).trim() : undefined,
+      overallDifficulty: overallDifficulty || undefined,
+      tags: Array.isArray(tags) ? tags.map((t: any) => String(t)) : [],
+      topics: Array.isArray(topics) ? topics.map((t: any) => String(t)) : [],
+      modelVersion: modelVersion || undefined,
+      requestedCounts: requestedCounts || { easy: 0, medium: 0, hard: 0 },
+      questions: questions.map((q: any) => ({
+        text: String(q.text || "").trim(),
+        options: Array.isArray(q.options) ? q.options.map((o: any) => String(o)) : [],
+        correctIndex: typeof q.correctIndex === "number" ? q.correctIndex : undefined,
+        image: q.image || undefined,
+        subject: String(q.subject || subject).trim(),
+        chapter: q.chapter || undefined,
+        difficulty: q.difficulty || undefined,
+        topics: Array.isArray(q.topics) ? q.topics : [],
+        tags: Array.isArray(q.tags) ? q.tags : [],
+        source: q.source || undefined,
+      })),
+      generationMeta: generationMeta || undefined,
+      status: status || "draft",
+      createdBy: userId,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        _id: paper._id,
+        title: paper.title,
+        subject: paper.subject,
+        questionsCount: paper.questions.length,
+        status: paper.status,
+        createdAt: paper.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error creating question paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const listQuestionPapers = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { page = "1", limit = "20", subject, status, search } = req.query as Record<string, string | undefined>;
+
+    const pageNum = Math.max(parseInt(page || "1", 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit || "20", 10) || 20, 1), 100);
+
+    const query: Record<string, unknown> = { createdBy: userId };
+
+    if (subject && String(subject).trim()) {
+      query.subject = String(subject).trim();
+    }
+    if (status && ["draft", "finalized", "archived"].includes(status)) {
+      query.status = status;
+    }
+    if (search && String(search).trim()) {
+      query.title = { $regex: String(search).trim(), $options: "i" };
+    }
+
+    const [items, total] = await Promise.all([
+      QuestionPaper.find(query)
+        .sort({ updatedAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .select("title description subject chapter modelVersion status createdAt updatedAt")
+        .lean()
+        .then((papers) =>
+          papers.map((p: any) => ({
+            ...p,
+            questionsCount: p.questions?.length || 0,
+          }))
+        ),
+      QuestionPaper.countDocuments(query),
+    ]);
+
+    // Fetch question counts in a separate query since we're using select
+    const papersWithCounts = await Promise.all(
+      items.map(async (item: any) => {
+        const paper = await QuestionPaper.findById(item._id).select("questions").lean();
+        return {
+          ...item,
+          questionsCount: paper?.questions?.length || 0,
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: papersWithCounts,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    console.error("Error listing question papers:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const getQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId } = req.params;
+    if (!paperId) {
+      res.status(400).json({ success: false, message: "paperId is required" });
+      return;
+    }
+
+    const paper = await QuestionPaper.findOne({ _id: paperId, createdBy: userId }).lean();
+
+    if (!paper) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: paper });
+  } catch (error) {
+    console.error("Error getting question paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const updateQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId } = req.params;
+    if (!paperId) {
+      res.status(400).json({ success: false, message: "paperId is required" });
+      return;
+    }
+
+    const {
+      title,
+      description,
+      subject,
+      chapter,
+      overallDifficulty,
+      tags,
+      topics,
+      status,
+      questions,
+    } = req.body || {};
+
+    const updateFields: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (title !== undefined) updateFields.title = String(title).trim();
+    if (description !== undefined) updateFields.description = description ? String(description).trim() : null;
+    if (subject !== undefined) updateFields.subject = String(subject).trim();
+    if (chapter !== undefined) updateFields.chapter = chapter ? String(chapter).trim() : null;
+    if (overallDifficulty !== undefined) updateFields.overallDifficulty = overallDifficulty || null;
+    if (tags !== undefined) updateFields.tags = Array.isArray(tags) ? tags.map((t: any) => String(t)) : [];
+    if (topics !== undefined) updateFields.topics = Array.isArray(topics) ? topics.map((t: any) => String(t)) : [];
+    if (status !== undefined && ["draft", "finalized", "archived"].includes(status)) {
+      updateFields.status = status;
+    }
+
+    if (questions !== undefined && Array.isArray(questions)) {
+      updateFields.questions = questions.map((q: any) => ({
+        _id: q._id || undefined,
+        text: String(q.text || "").trim(),
+        options: Array.isArray(q.options) ? q.options.map((o: any) => String(o)) : [],
+        correctIndex: typeof q.correctIndex === "number" ? q.correctIndex : undefined,
+        image: q.image || undefined,
+        subject: String(q.subject || subject || "").trim(),
+        chapter: q.chapter || undefined,
+        difficulty: q.difficulty || undefined,
+        topics: Array.isArray(q.topics) ? q.topics : [],
+        tags: Array.isArray(q.tags) ? q.tags : [],
+        source: q.source || undefined,
+      }));
+    }
+
+    const paper = await QuestionPaper.findOneAndUpdate(
+      { _id: paperId, createdBy: userId },
+      { $set: updateFields },
+      { new: true }
+    ).lean();
+
+    if (!paper) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: paper });
+  } catch (error) {
+    console.error("Error updating question paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const updateQuestionInPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId, questionId } = req.params;
+    if (!paperId || !questionId) {
+      res.status(400).json({ success: false, message: "paperId and questionId are required" });
+      return;
+    }
+
+    const { text, options, correctIndex, image, chapter, difficulty, topics, tags } = req.body || {};
+
+    const paper = await QuestionPaper.findOne({ _id: paperId, createdBy: userId });
+
+    if (!paper) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    const questionIndex = paper.questions.findIndex((q: any) => String(q._id) === questionId);
+    if (questionIndex === -1) {
+      res.status(404).json({ success: false, message: "Question not found in paper" });
+      return;
+    }
+
+    // Update question fields
+    if (text !== undefined) paper.questions[questionIndex].text = String(text).trim();
+    if (options !== undefined && Array.isArray(options)) {
+      paper.questions[questionIndex].options = options.map((o: any) => String(o));
+    }
+    if (correctIndex !== undefined) {
+      paper.questions[questionIndex].correctIndex = typeof correctIndex === "number" ? correctIndex : undefined;
+    }
+    if (image !== undefined) paper.questions[questionIndex].image = image || undefined;
+    if (chapter !== undefined) paper.questions[questionIndex].chapter = chapter || undefined;
+    if (difficulty !== undefined) paper.questions[questionIndex].difficulty = difficulty || undefined;
+    if (topics !== undefined) paper.questions[questionIndex].topics = Array.isArray(topics) ? topics : [];
+    if (tags !== undefined) paper.questions[questionIndex].tags = Array.isArray(tags) ? tags : [];
+
+    paper.updatedAt = new Date();
+    await paper.save();
+
+    res.status(200).json({
+      success: true,
+      data: paper.questions[questionIndex],
+    });
+  } catch (error) {
+    console.error("Error updating question in paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const deleteQuestionFromPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId, questionId } = req.params;
+    if (!paperId || !questionId) {
+      res.status(400).json({ success: false, message: "paperId and questionId are required" });
+      return;
+    }
+
+    const paper = await QuestionPaper.findOneAndUpdate(
+      { _id: paperId, createdBy: userId },
+      {
+        $pull: { questions: { _id: questionId } },
+        $set: { updatedAt: new Date() },
+      },
+      { new: true }
+    );
+
+    if (!paper) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Question removed from paper",
+      questionsCount: paper.questions.length,
+    });
+  } catch (error) {
+    console.error("Error deleting question from paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const addQuestionToPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId } = req.params;
+    if (!paperId) {
+      res.status(400).json({ success: false, message: "paperId is required" });
+      return;
+    }
+
+    const { text, options, correctIndex, image, subject, chapter, difficulty, topics, tags } = req.body || {};
+
+    if (!text || !Array.isArray(options) || options.length < 2) {
+      res.status(400).json({ success: false, message: "text and at least 2 options are required" });
+      return;
+    }
+
+    const paper = await QuestionPaper.findOne({ _id: paperId, createdBy: userId });
+
+    if (!paper) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    const newQuestion = {
+      text: String(text).trim(),
+      options: options.map((o: any) => String(o)),
+      correctIndex: typeof correctIndex === "number" ? correctIndex : undefined,
+      image: image || undefined,
+      subject: subject || paper.subject,
+      chapter: chapter || paper.chapter || undefined,
+      difficulty: difficulty || undefined,
+      topics: Array.isArray(topics) ? topics : [],
+      tags: Array.isArray(tags) ? tags : [],
+    };
+
+    paper.questions.push(newQuestion as any);
+    paper.updatedAt = new Date();
+    await paper.save();
+
+    const addedQuestion = paper.questions[paper.questions.length - 1];
+
+    res.status(201).json({
+      success: true,
+      data: addedQuestion,
+      questionsCount: paper.questions.length,
+    });
+  } catch (error) {
+    console.error("Error adding question to paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const deleteQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId } = req.params;
+    if (!paperId) {
+      res.status(400).json({ success: false, message: "paperId is required" });
+      return;
+    }
+
+    const result = await QuestionPaper.findOneAndDelete({ _id: paperId, createdBy: userId });
+
+    if (!result) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: "Paper deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting question paper:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+export const duplicateQuestionPaper = async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { paperId } = req.params;
+    if (!paperId) {
+      res.status(400).json({ success: false, message: "paperId is required" });
+      return;
+    }
+
+    const original = await QuestionPaper.findOne({ _id: paperId, createdBy: userId }).lean();
+
+    if (!original) {
+      res.status(404).json({ success: false, message: "Paper not found" });
+      return;
+    }
+
+    const duplicate = await QuestionPaper.create({
+      ...original,
+      _id: undefined,
+      title: `${original.title} (Copy)`,
+      status: "draft",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      createdBy: userId,
+      questions: original.questions.map((q: any) => ({ ...q, _id: undefined })),
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        _id: duplicate._id,
+        title: duplicate.title,
+        subject: duplicate.subject,
+        questionsCount: duplicate.questions.length,
+        status: duplicate.status,
+        createdAt: duplicate.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error duplicating question paper:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

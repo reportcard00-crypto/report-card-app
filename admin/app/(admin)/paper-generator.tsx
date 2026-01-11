@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Platform, Alert } from "react-native";
+import { useRouter } from "expo-router";
 import { SUBJECTS, SUBJECT_TO_CHAPTERS, useQuestionEditorStore } from "@/store/questionEditor";
 import { 
   generateQuestionPaper, 
   generateQuestionPaperV1_5, 
   generateQuestionPaperV2,
+  createQuestionPaper,
   type GeneratedPaperItem,
   type GeneratedPaperItemV1_5,
   type GeneratedPaperItemV2,
@@ -21,6 +23,7 @@ const MODEL_OPTIONS: { value: ModelVersion; label: string; endpoint: string }[] 
 ];
 
 export default function PaperGeneratorScreen() {
+  const router = useRouter();
   const customChaptersBySubject = useQuestionEditorStore((s) => s.customChaptersBySubject);
   const addChapterForSubject = useQuestionEditorStore((s) => s.addChapterForSubject);
 
@@ -37,6 +40,8 @@ export default function PaperGeneratorScreen() {
   const [description, setDescription] = useState<string>("");
   const [modelVersion, setModelVersion] = useState<ModelVersion>("v1");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [paperTitle, setPaperTitle] = useState<string>("");
   const [results, setResults] = useState<(GeneratedPaperItem | GeneratedPaperItemV1_5 | GeneratedPaperItemV2)[]>([]);
 
   const chapters = useMemo(() => {
@@ -148,7 +153,68 @@ export default function PaperGeneratorScreen() {
     }
   };
 
-  const onClearResults = () => setResults([]);
+  const onClearResults = () => {
+    setResults([]);
+    setPaperTitle("");
+  };
+
+  const onSavePaper = async () => {
+    if (!subject) {
+      Alert.alert("Error", "Subject is required to save paper");
+      return;
+    }
+    if (results.length === 0) {
+      Alert.alert("Error", "Generate questions first before saving");
+      return;
+    }
+    const title = paperTitle.trim() || `${subject} Paper - ${new Date().toLocaleDateString()}`;
+    
+    try {
+      setIsSaving(true);
+      const resp = await createQuestionPaper({
+        title,
+        description: description || undefined,
+        subject,
+        chapter: chapter || undefined,
+        overallDifficulty: overallDifficulty || undefined,
+        tags,
+        topics,
+        modelVersion,
+        requestedCounts: {
+          easy: parseInt(easyCount || "0") || 0,
+          medium: parseInt(mediumCount || "0") || 0,
+          hard: parseInt(hardCount || "0") || 0,
+        },
+        questions: results.map((q) => ({
+          text: q.text,
+          options: q.options,
+          correctIndex: q.correctIndex,
+          subject: q.subject,
+          chapter: q.chapter || undefined,
+          difficulty: q.difficulty,
+          topics: q.topics,
+          tags: q.tags,
+          source: q.source,
+        })),
+        status: "draft",
+      });
+      
+      Alert.alert(
+        "Paper Saved!",
+        `"${resp.data.title}" has been saved with ${resp.data.questionsCount} questions.`,
+        [
+          { text: "View History", onPress: () => router.push("/paper-history" as any) },
+          { text: "Edit Paper", onPress: () => router.push(`/paper-editor?id=${resp.data._id}` as any) },
+          { text: "OK" },
+        ]
+      );
+    } catch (e: any) {
+      const message = e?.response?.data?.message || e?.message || "Failed to save paper";
+      Alert.alert("Error", String(message));
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -319,12 +385,35 @@ export default function PaperGeneratorScreen() {
 
       {results.length > 0 && (
         <View style={styles.section}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <Text style={styles.label}>Generated Questions ({results.length})</Text>
-            <Pressable onPress={onClearResults} style={[styles.btn, { height: 32, paddingHorizontal: 10 }]}>
-              <Text style={styles.btnText}>Clear</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable onPress={() => router.push("/paper-history" as any)} style={[styles.btn, styles.outlineBtn, { height: 32, paddingHorizontal: 10 }]}>
+                <Text style={styles.outlineBtnText}>History</Text>
+              </Pressable>
+              <Pressable onPress={onClearResults} style={[styles.btn, styles.dangerBtn, { height: 32, paddingHorizontal: 10 }]}>
+                <Text style={styles.btnText}>Clear</Text>
+              </Pressable>
+            </View>
+          </View>
+          
+          {/* Save Paper Section */}
+          <View style={styles.saveSection}>
+            <TextInput
+              placeholder="Paper title (optional, auto-generated if empty)"
+              value={paperTitle}
+              onChangeText={setPaperTitle}
+              style={[styles.input, { flex: 1 }]}
+            />
+            <Pressable 
+              disabled={isSaving} 
+              onPress={onSavePaper} 
+              style={[styles.btn, styles.saveBtn, isSaving && { opacity: 0.7 }]}
+            >
+              <Text style={styles.btnText}>{isSaving ? "Saving..." : "Save Paper"}</Text>
             </Pressable>
           </View>
+          
           <View style={{ gap: 12 }}>
             {results.map((q, idx) => {
               const correct = typeof q.correctIndex === "number" ? q.correctIndex : -1;
@@ -378,6 +467,12 @@ const styles = StyleSheet.create({
   btnText: { color: "#fff", fontWeight: "600" },
   helper: { color: "#6b7280" },
   generateBtn: { marginTop: 8 },
+  // Save section
+  saveSection: { flexDirection: "row", gap: 12, alignItems: "center", padding: 12, backgroundColor: "#f0fdf4", borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0", marginBottom: 8 },
+  saveBtn: { backgroundColor: "#16a34a", minWidth: 100 },
+  outlineBtn: { backgroundColor: "transparent", borderWidth: 1, borderColor: "#111827" },
+  outlineBtnText: { color: "#111827", fontWeight: "600" },
+  dangerBtn: { backgroundColor: "#dc2626" },
   // results
   card: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 12, backgroundColor: "#fff", gap: 6 },
   qIndex: { fontSize: 12, color: "#6b7280" },

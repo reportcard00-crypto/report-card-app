@@ -281,6 +281,17 @@ export async function uploadPdfDirect(params: { dataBase64: string; fileType?: s
   return resp.data;
 }
 
+// Upload image (accepts base64 string)
+export async function uploadImageDirect(params: { dataBase64: string; fileType?: string; fileName?: string }) {
+  const resp = await apiClient.post<{ publicUrl: string }>("/api/file/upload-direct", {
+    fileType: params.fileType ?? "image/png",
+    fileName: params.fileName ?? `question-image-${Date.now()}.png`,
+    dataBase64: params.dataBase64,
+    isPermanent: true,
+  });
+  return resp.data;
+}
+
 // 3) Tell backend to process the already-uploaded PDF by its public URL
 export async function processQuestionPdf(params: { pdfUrl: string; startPage: number; numPages: number }) {
   const resp = await apiClient.post(`/api/admin/question-pdfs/process`, {
@@ -500,6 +511,227 @@ export async function generateQuestionPaperV2(params: {
   };
   const resp = await apiClient.post(`/api/admin/papers/generate-v2`, payload);
   return resp.data as GeneratePaperV2Response;
+}
+
+// ============================================================
+// Question Paper CRUD Types and Functions
+// ============================================================
+
+export type PaperQuestion = {
+  _id: string;
+  text: string;
+  options: string[];
+  correctIndex?: number;
+  image?: string;
+  subject: string;
+  chapter?: string | null;
+  difficulty?: "easy" | "medium" | "hard";
+  topics?: string[];
+  tags?: string[];
+  source?: {
+    keyword?: string;
+    curatedPineconeIds?: string[];
+    permutation?: string;
+  };
+};
+
+export type QuestionPaper = {
+  _id: string;
+  title: string;
+  description?: string;
+  subject: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  tags: string[];
+  topics: string[];
+  modelVersion?: string;
+  requestedCounts: {
+    easy: number;
+    medium: number;
+    hard: number;
+  };
+  questions: PaperQuestion[];
+  status: "draft" | "finalized" | "archived";
+  generationMeta?: {
+    iterations?: number;
+    keywordsUsed?: string[];
+    evaluation?: {
+      overallScore?: number;
+      coverageScore?: number;
+      diversityScore?: number;
+      difficultyBalanceScore?: number;
+      suggestions?: string[];
+      weakAreas?: string[];
+      missingTopics?: string[];
+    };
+  };
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QuestionPaperListItem = {
+  _id: string;
+  title: string;
+  description?: string;
+  subject: string;
+  chapter?: string | null;
+  modelVersion?: string;
+  status: "draft" | "finalized" | "archived";
+  questionsCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListPapersResponse = {
+  success: boolean;
+  data: QuestionPaperListItem[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+};
+
+// Create a new question paper
+export async function createQuestionPaper(params: {
+  title: string;
+  description?: string;
+  subject: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  tags?: string[];
+  topics?: string[];
+  modelVersion?: string;
+  requestedCounts?: { easy: number; medium: number; hard: number };
+  questions: Array<{
+    text: string;
+    options: string[];
+    correctIndex?: number;
+    image?: string;
+    subject?: string;
+    chapter?: string | null;
+    difficulty?: "easy" | "medium" | "hard";
+    topics?: string[];
+    tags?: string[];
+    source?: any;
+  }>;
+  generationMeta?: any;
+  status?: "draft" | "finalized" | "archived";
+}) {
+  const resp = await apiClient.post(`/api/admin/papers`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      title: string;
+      subject: string;
+      questionsCount: number;
+      status: string;
+      createdAt: string;
+    };
+  };
+}
+
+// List question papers with pagination
+export async function listQuestionPapers(params: {
+  page?: number;
+  limit?: number;
+  subject?: string;
+  status?: string;
+  search?: string;
+} = {}) {
+  const resp = await apiClient.get<ListPapersResponse>("/api/admin/papers", { params });
+  return resp.data;
+}
+
+// Get a single question paper by ID
+export async function getQuestionPaper(paperId: string) {
+  const resp = await apiClient.get(`/api/admin/papers/${paperId}`);
+  return resp.data as { success: boolean; data: QuestionPaper };
+}
+
+// Update a question paper
+export async function updateQuestionPaper(paperId: string, params: {
+  title?: string;
+  description?: string | null;
+  subject?: string;
+  chapter?: string | null;
+  overallDifficulty?: "easy" | "medium" | "hard" | null;
+  tags?: string[];
+  topics?: string[];
+  status?: "draft" | "finalized" | "archived";
+  questions?: Array<{
+    _id?: string;
+    text: string;
+    options: string[];
+    correctIndex?: number;
+    image?: string;
+    subject?: string;
+    chapter?: string | null;
+    difficulty?: "easy" | "medium" | "hard";
+    topics?: string[];
+    tags?: string[];
+    source?: any;
+  }>;
+}) {
+  const resp = await apiClient.put(`/api/admin/papers/${paperId}`, params);
+  return resp.data as { success: boolean; data: QuestionPaper };
+}
+
+// Delete a question paper
+export async function deleteQuestionPaper(paperId: string) {
+  const resp = await apiClient.delete(`/api/admin/papers/${paperId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Duplicate a question paper
+export async function duplicateQuestionPaper(paperId: string) {
+  const resp = await apiClient.post(`/api/admin/papers/${paperId}/duplicate`);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      title: string;
+      subject: string;
+      questionsCount: number;
+      status: string;
+      createdAt: string;
+    };
+  };
+}
+
+// Add a question to a paper
+export async function addQuestionToPaper(paperId: string, question: {
+  text: string;
+  options: string[];
+  correctIndex?: number;
+  image?: string;
+  subject?: string;
+  chapter?: string | null;
+  difficulty?: "easy" | "medium" | "hard";
+  topics?: string[];
+  tags?: string[];
+}) {
+  const resp = await apiClient.post(`/api/admin/papers/${paperId}/questions`, question);
+  return resp.data as { success: boolean; data: PaperQuestion; questionsCount: number };
+}
+
+// Update a question within a paper
+export async function updateQuestionInPaper(paperId: string, questionId: string, updates: {
+  text?: string;
+  options?: string[];
+  correctIndex?: number;
+  image?: string;
+  chapter?: string | null;
+  difficulty?: "easy" | "medium" | "hard";
+  topics?: string[];
+  tags?: string[];
+}) {
+  const resp = await apiClient.put(`/api/admin/papers/${paperId}/questions/${questionId}`, updates);
+  return resp.data as { success: boolean; data: PaperQuestion };
+}
+
+// Delete a question from a paper
+export async function deleteQuestionFromPaper(paperId: string, questionId: string) {
+  const resp = await apiClient.delete(`/api/admin/papers/${paperId}/questions/${questionId}`);
+  return resp.data as { success: boolean; message: string; questionsCount: number };
 }
 
 
