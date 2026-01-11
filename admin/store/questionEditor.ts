@@ -26,6 +26,8 @@ export type QuestionEditorState = {
   selectedIndex: number;
   selectedSubject: string | null;
   customChaptersBySubject: Record<string, string[]>;
+  isStreaming: boolean;
+  streamSessionId: string | null;
   setQuestions: (questions: EditorQuestion[], selectIndex?: number) => void;
   selectIndex: (index: number) => void;
   updateQuestionText: (questionId: string, text: string) => void;
@@ -43,6 +45,18 @@ export type QuestionEditorState = {
   setTags: (questionId: string, tags: string[]) => void;
   addChapterForSubject: (subject: string, chapter: string) => void;
   setDescription: (questionId: string, description: string | null) => void;
+  // Streaming support
+  clearQuestions: () => void;
+  addStreamedQuestion: (data: {
+    dbId: string;
+    question: string;
+    options: string[];
+    correctIndex?: number;
+    image?: string | null;
+    page: number;
+  }) => void;
+  setIsStreaming: (streaming: boolean) => void;
+  setStreamSessionId: (sessionId: string | null) => void;
 };
 
 const makeId = (prefix = "id") => `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -115,6 +129,8 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
   selectedIndex: 0,
   selectedSubject: null,
   customChaptersBySubject: {},
+  isStreaming: false,
+  streamSessionId: null,
   setQuestions: (questions, selectIndex) =>
     set({
       questions,
@@ -208,6 +224,44 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
         customChaptersBySubject: { ...state.customChaptersBySubject, [subject]: nextForSubject },
       };
     }),
+  // Streaming support methods
+  clearQuestions: () => set({ questions: [], selectedIndex: 0 }),
+  addStreamedQuestion: (data) =>
+    set((state) => {
+      const options: EditorOption[] = data.options.map((opt, idx) => ({
+        id: makeId("opt"),
+        text: opt,
+      }));
+      
+      let correctOptionId: string | null = null;
+      if (typeof data.correctIndex === "number" && options[data.correctIndex]) {
+        correctOptionId = options[data.correctIndex].id;
+      }
+      
+      const image = toDataUrlIfNeeded(data.image);
+      
+      const newQuestion: EditorQuestion = {
+        id: data.dbId || makeId(`q${state.questions.length + 1}`),
+        text: data.question,
+        options,
+        correctOptionId,
+        image: image ?? null,
+        originalImage: image ?? null,
+        chapter: null,
+        difficulty: null,
+        topics: [],
+        tags: [],
+        description: null,
+      };
+      
+      return {
+        questions: [...state.questions, newQuestion],
+        // Auto-select the newly added question
+        selectedIndex: state.questions.length,
+      };
+    }),
+  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+  setStreamSessionId: (sessionId) => set({ streamSessionId: sessionId }),
 }));
 
 export const SUBJECTS: string[] = ["Mathematics", "Physics", "Chemistry", "Biology"];

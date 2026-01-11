@@ -1,4 +1,5 @@
-import apiClient from "./client";
+import apiClient, { baseUrl } from "./client";
+import { store } from "@/utils";
 
 export type AdminUser = {
   _id: string;
@@ -23,6 +24,190 @@ export async function listUsers(params: { search?: string; role?: string; page?:
 export async function updateUserRole(userId: string, role: "user" | "teacher" | "admin") {
   const resp = await apiClient.patch<{ success: boolean; user: AdminUser }>(`/api/admin/users/${userId}/role`, { role });
   return resp.data;
+}
+
+// Upload history types
+export type UploadSession = {
+  _id: string;
+  fileName: string;
+  subject: string;
+  startPage: number;
+  numPages: number;
+  totalQuestionsExtracted: number;
+  status: "processing" | "completed" | "failed";
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type UploadHistoryResponse = {
+  success: boolean;
+  data: UploadSession[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+};
+
+// Fetch upload history
+export async function getUploadHistory(params: { page?: number; limit?: number } = {}) {
+  const resp = await apiClient.get<UploadHistoryResponse>("/api/admin/upload-history", { params });
+  return resp.data;
+}
+
+// Fetch questions from a specific session
+export async function getSessionQuestions(sessionId: string) {
+  const resp = await apiClient.get(`/api/admin/upload-history/${sessionId}/questions`);
+  return resp.data as {
+    success: boolean;
+    data: {
+      session: {
+        id: string;
+        fileName: string;
+        subject: string;
+        startPage: number;
+        numPages: number;
+        status: string;
+        createdAt: string;
+        completedAt?: string;
+      };
+      questions: Array<{
+        _id: string;
+        text: string;
+        options: string[];
+        correctIndex?: number;
+        image?: string;
+        subject: string;
+        chapter?: string;
+        difficulty?: string;
+        topics?: string[];
+        tags?: string[];
+        description?: string;
+        sourcePage?: number;
+      }>;
+    };
+  };
+}
+
+// Streaming question extraction types
+export type StreamEvent = 
+  | { type: "session_started"; sessionId: string; fileName: string; subject: string; startPage: number; numPages: number }
+  | { type: "progress"; message: string; step: string; totalPages?: number; startPage?: number; endPage?: number; totalPdfPages?: number }
+  | { type: "page_start"; pageNum: number; totalPages: number; currentPage: number; pagesCompleted?: number; pagesRemaining?: number }
+  | { type: "page_error"; pageNum: number; error: string }
+  | { type: "question"; index: number; dbId: string; pineconeId?: string; question: string; options: string[]; correctIndex?: number; correctOption?: string; image?: string | null; page: number; isExisting: boolean }
+  | { type: "page_complete"; pageNum: number; questionsOnPage: number; totalSoFar: number }
+  | { type: "complete"; sessionId: string; totalQuestions: number; savedToDb: number }
+  | { type: "error"; message: string; details?: string };
+
+// Streaming PDF processing using SSE
+export async function processQuestionPdfStream(
+  params: { 
+    pdfUrl: string; 
+    fileName: string;
+    startPage: number; 
+    numPages: number; 
+    subject: string;
+  },
+  onEvent: (event: StreamEvent) => void,
+  onError?: (error: Error) => void
+): Promise<void> {
+  const authToken = await store.get("token");
+  
+  return new Promise((resolve, reject) => {
+    // Use fetch for SSE support
+    fetch(`${baseUrl}/api/admin/question-pdfs/process-stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`,
+        "ngrok-skip-browser-warning": "true",
+        "Accept": "text/event-stream",
+      },
+      body: JSON.stringify({
+        fileUrl: params.pdfUrl,
+        fileName: params.fileName,
+        startPage: params.startPage,
+        numPages: params.numPages,
+        subject: params.subject,
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        if (!response.body) {
+          throw new Error("Response body is null");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEventType = "";
+
+        const processChunk = async (): Promise<void> => {
+          try {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+              // Process any remaining buffer
+              if (buffer.trim()) {
+                processBuffer();
+              }
+              resolve();
+              return;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            processBuffer();
+
+            // Continue reading
+            return processChunk();
+          } catch (error) {
+            if (onError && error instanceof Error) {
+              onError(error);
+            }
+            reject(error);
+          }
+        };
+
+        const processBuffer = () => {
+          // Split by double newline (SSE event separator)
+          const events = buffer.split("\n\n");
+          // Keep last potentially incomplete event in buffer
+          buffer = events.pop() || "";
+          
+          for (const eventBlock of events) {
+            if (!eventBlock.trim()) continue;
+            
+            const lines = eventBlock.split("\n");
+            let eventType = "";
+            let eventData = "";
+            
+            for (const line of lines) {
+              if (line.startsWith("event:")) {
+                eventType = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                eventData = line.slice(5).trim();
+              }
+            }
+            
+            if (eventType && eventData) {
+              try {
+                const parsed = JSON.parse(eventData);
+                onEvent({ type: eventType, ...parsed } as StreamEvent);
+              } catch (e) {
+                console.error("Failed to parse SSE data:", e, eventData);
+              }
+            }
+          }
+        };
+
+        processChunk();
+      })
+      .catch((error) => {
+        if (onError && error instanceof Error) {
+          onError(error);
+        }
+        reject(error);
+      });
+  });
 }
 
 // 1) Ask backend for a presigned slot to upload a PDF to R2

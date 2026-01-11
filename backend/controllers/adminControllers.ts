@@ -7,6 +7,7 @@ import { getDocument } from "pdfjs-dist";
 import type { CustomRequest } from "../types";
 import { uploadBufferToR2 } from "../utils/fileupload";
 import Question from "../models/questionModel";
+import UploadSession from "../models/uploadSessionModel";
 import { getEmbeddingForText, upsertVectorsToPinecone, querySimilarInPinecone } from "../utils/vector";
 import { v4 as uuidv4 } from "uuid";
 import { createHash } from "crypto";
@@ -468,6 +469,518 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
     });
   } catch (error) {
     console.error("Error uploading question PDF:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Helper functions for hash computation
+const normalizeText = (s: string) =>
+  s
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const computeContentHash = (subjectVal: string, textVal: string, optionVals: string[]) => {
+  const base = [
+    normalizeText(subjectVal),
+    normalizeText(textVal),
+    ...optionVals.map((o) => normalizeText(o)),
+  ].join("||");
+  return createHash("sha256").update(base).digest("hex");
+};
+
+// Streaming PDF processing with real-time question extraction and DB saves
+export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response) => {
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  
+  // Flush headers immediately
+  res.flushHeaders();
+
+  const sendEvent = (event: string, data: any) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    // Force flush if available
+    if (typeof (res as any).flush === "function") {
+      (res as any).flush();
+    }
+  };
+
+  let sessionId: string | null = null;
+
+  try {
+    const { fileUrl, fileName, startPage, numPages, subject } = (req.body || {}) as {
+      fileUrl?: string;
+      fileName?: string;
+      startPage?: string | number;
+      numPages?: string | number;
+      subject?: string;
+    };
+
+    if (!fileUrl || typeof fileUrl !== "string") {
+      sendEvent("error", { message: "fileUrl is required" });
+      res.end();
+      return;
+    }
+
+    if (!subject || typeof subject !== "string") {
+      sendEvent("error", { message: "subject is required" });
+      res.end();
+      return;
+    }
+
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      sendEvent("error", { message: "Unauthorized" });
+      res.end();
+      return;
+    }
+
+    const startPageNum = Math.max(parseInt(String(startPage ?? "1"), 10) || 1, 1);
+    const numPagesNum = Math.max(parseInt(String(numPages ?? "1"), 10) || 1, 1);
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      sendEvent("error", { message: "OPENROUTER_API_KEY not configured" });
+      res.end();
+      return;
+    }
+
+    // Create upload session record
+    const uploadSession = await UploadSession.create({
+      fileName: fileName || "question.pdf",
+      fileUrl,
+      subject,
+      startPage: startPageNum,
+      numPages: numPagesNum,
+      status: "processing",
+      createdBy: currentUser._id,
+    });
+    sessionId = uploadSession._id.toString();
+
+    sendEvent("session_started", { 
+      sessionId, 
+      fileName: fileName || "question.pdf",
+      subject,
+      startPage: startPageNum,
+      numPages: numPagesNum
+    });
+
+    // Download the PDF from R2 and load via pdfjs
+    sendEvent("progress", { message: "Downloading PDF...", step: "download" });
+    const pdfResp = await axios.get<ArrayBuffer>(fileUrl, { responseType: "arraybuffer" });
+    const pdfData = new Uint8Array(pdfResp.data as any);
+    const loadingTask = getDocument({ data: pdfData, disableFontFace: true, isEvalSupported: false });
+    const pdf = await loadingTask.promise;
+    const totalPages = pdf.numPages;
+
+    const start = Math.min(startPageNum, totalPages);
+    const end = Math.min(start + numPagesNum - 1, totalPages);
+    const actualNumPages = end - start + 1;
+
+    // Notify about any page adjustment
+    if (startPageNum > totalPages || startPageNum + numPagesNum - 1 > totalPages) {
+      sendEvent("progress", { 
+        message: `PDF has ${totalPages} pages. Adjusted range to pages ${start}-${end} (${actualNumPages} pages)`, 
+        step: "adjusted",
+        requestedStart: startPageNum,
+        requestedNum: numPagesNum,
+        actualStart: start,
+        actualEnd: end,
+        totalPdfPages: totalPages,
+        totalPages: actualNumPages
+      });
+    }
+
+    sendEvent("progress", { 
+      message: `Processing ${actualNumPages} page${actualNumPages > 1 ? 's' : ''} (${start} to ${end})`, 
+      step: "processing",
+      totalPages: actualNumPages,
+      startPage: start,
+      endPage: end,
+      totalPdfPages: totalPages
+    });
+
+    type ExtractedQuestion = {
+      question: string;
+      options: string[];
+      correctOption?: string;
+      image?: string | null;
+      page: number;
+    };
+
+    const seenQuestions = new Set<string>();
+    let previousPageDataUrl: string | null = null;
+    let previousPageExtraction: any[] = [];
+
+    const userId = String(currentUser._id || "");
+    const role = String(currentUser.role || "");
+    const savedQuestionIds: string[] = [];
+    let questionIndex = 0;
+
+    for (let pageNum = start; pageNum <= end; pageNum++) {
+      sendEvent("page_start", { 
+        pageNum,                          // Actual PDF page number
+        totalPages: actualNumPages,       // Total pages to process
+        currentPage: pageNum - start + 1, // 1-indexed position in our processing range
+        pagesCompleted: pageNum - start,  // How many pages already done
+        pagesRemaining: end - pageNum + 1 // How many pages left including current
+      });
+
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      // @ts-ignore
+      const context = canvas.getContext("2d");
+
+      await page.render({ canvasContext: context, viewport }).promise;
+      const pngBuffer = canvas.toBuffer("image/png");
+      const base64Image = pngBuffer.toString("base64");
+      const dataUrl = `data:image/png;base64,${base64Image}`;
+
+      // Build prompt for OpenRouter (multimodal)
+      const model = "google/gemini-3-pro-preview";
+      const baseSystemPrompt =
+        "You are an expert at parsing printed, scanned exam pages. Extract all multiple-choice questions. " +
+        "Return ONLY strict JSON (no prose). For each question, include: " +
+        "`question` (string, the stem), `options` (array of strings in order), and, if clearly present, `correctOption` (string matching one of the options). " +
+        "If a diagram is associated with a question, set `hasDiagram` to true and also include `diagramBox` " +
+        "as an object with normalized coordinates relative to the image dimensions: " +
+        "{ x: number, y: number, width: number, height: number } with 0 <= values <= 1. " +
+        "The box should tightly enclose only the figure/diagram related to that question (exclude text as much as possible). " +
+        "Focus only on printed/typed content; ignore handwritten notes.";
+
+      const firstPageInstruction =
+        "Extract questions from this page image and respond with a JSON array using this exact schema: " +
+        "[{ \"question\": string, \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
+        "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
+        "Do not include any text outside the JSON. If no questions found, return []. " +
+        "When a diagram is present, provide a precise `diagramBox` around the diagram only.";
+
+      const continuationInstruction =
+        "The next page may contain the continuation of a question that started on the previous page. " +
+        "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, and (3) the current page image. " +
+        "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
+        "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
+        "Output must be a JSON array with the same exact schema as before. " +
+        "If nothing new or continued is found, return [].";
+
+      const payload = {
+        model,
+        messages: [
+          { role: "system", content: baseSystemPrompt },
+          pageNum === start
+            ? {
+                role: "user",
+                content: [
+                  { type: "text", text: firstPageInstruction },
+                  { type: "image_url", image_url: { url: dataUrl } },
+                ],
+              }
+            : {
+                role: "user",
+                content: [
+                  { type: "text", text: continuationInstruction },
+                  ...(previousPageDataUrl ? [{ type: "image_url", image_url: { url: previousPageDataUrl } } as any] : []),
+                  {
+                    type: "text",
+                    text:
+                      "Previous page extracted JSON (may be incomplete for split questions):\n" +
+                      JSON.stringify(previousPageExtraction || [], null, 2),
+                  },
+                  { type: "image_url", image_url: { url: dataUrl } },
+                ],
+              },
+        ],
+        temperature: 0,
+      };
+
+      const headers = {
+        Authorization: `Bearer ${openrouterApiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost",
+        "X-Title": process.env.OPENROUTER_APP_NAME || "ReportCardApp",
+      };
+
+      let extracted: any[] = [];
+      try {
+        const resp = await axios.post("https://openrouter.ai/api/v1/chat/completions", payload, { headers });
+        const content: string = resp?.data?.choices?.[0]?.message?.content || "[]";
+        const jsonText = extractJsonArray(content);
+        extracted = JSON.parse(jsonText);
+      } catch (err) {
+        console.error("OpenRouter extraction failed for page", pageNum, err);
+        extracted = [];
+        sendEvent("page_error", { pageNum, error: "AI extraction failed for this page" });
+      }
+
+      for (const item of extracted) {
+        let diagramUrl: string | null = null;
+        if (item?.hasDiagram && item?.diagramBox && typeof item.diagramBox === "object") {
+          const rel = item.diagramBox || {};
+          const cw = canvas.width;
+          const ch = canvas.height;
+          const rx = Math.max(0, Math.min(1, Number(rel.x)));
+          const ry = Math.max(0, Math.min(1, Number(rel.y)));
+          const rw = Math.max(0, Math.min(1, Number(rel.width)));
+          const rh = Math.max(0, Math.min(1, Number(rel.height)));
+          let sx = Math.floor(rx * cw);
+          let sy = Math.floor(ry * ch);
+          let sw = Math.floor(rw * cw);
+          let sh = Math.floor(rh * ch);
+          const pad = 8;
+          sx = Math.max(0, sx - pad);
+          sy = Math.max(0, sy - pad);
+          sw = Math.min(cw - sx, sw + 2 * pad);
+          sh = Math.min(ch - sy, sh + 2 * pad);
+          if (sw > 5 && sh > 5) {
+            const crop = createCanvas(sw, sh);
+            // @ts-ignore
+            const cropCtx = crop.getContext("2d");
+            // @ts-ignore
+            cropCtx.drawImage(canvas as any, sx, sy, sw, sh, 0, 0, sw, sh);
+            const cropBuffer = crop.toBuffer("image/png");
+            try {
+              const uploaded = await uploadBufferToR2(
+                cropBuffer,
+                "image/png",
+                `diagram_page_${pageNum}.png`,
+                role,
+                userId,
+                true
+              );
+              diagramUrl = uploaded.publicUrl;
+            } catch (e) {
+              console.error("Failed to upload diagram image to R2", e);
+              diagramUrl = null;
+            }
+          }
+        }
+
+        const questionText = String(item?.question || "").trim();
+        const options: string[] = Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [];
+
+        if (questionText && options.length > 0 && !seenQuestions.has(questionText)) {
+          seenQuestions.add(questionText);
+          questionIndex++;
+
+          // Determine correct index
+          let correctIndex: number | undefined;
+          if (item?.correctOption) {
+            const correctText = String(item.correctOption);
+            const foundIdx = options.findIndex((o) => o.trim() === correctText.trim());
+            if (foundIdx >= 0) correctIndex = foundIdx;
+          }
+
+          // Compute content hash for deduplication
+          const contentHash = computeContentHash(subject, questionText, options);
+
+          // Check if question already exists in DB
+          const existingQuestion = await Question.findOne({ contentHash });
+          
+          let savedQuestion;
+          let dbId: string;
+          let pineconeId: string | undefined;
+
+          if (existingQuestion) {
+            // Question already exists, use existing
+            dbId = existingQuestion._id.toString();
+            pineconeId = existingQuestion.pineconeId ?? undefined;
+            savedQuestion = existingQuestion;
+          } else {
+            // Create embedding and save to Pinecone + MongoDB
+            try {
+              const embedTextParts = [
+                subject,
+                questionText,
+                ...options.map((o: string, i: number) => `(${i + 1}) ${o}`),
+              ].filter(Boolean);
+              const embedInput = embedTextParts.join("\n");
+              const values = await getEmbeddingForText(embedInput);
+              const vecId = uuidv4();
+
+              // Build Pinecone metadata
+              const metadata: Record<string, string | number | boolean | string[]> = {
+                subject,
+                hasImage: Boolean(diagramUrl),
+              };
+
+              // Upsert to Pinecone
+              await upsertVectorsToPinecone([{
+                id: vecId,
+                values,
+                metadata,
+              }]);
+
+              // Save to MongoDB
+              savedQuestion = await Question.create({
+                text: questionText,
+                options,
+                correctIndex,
+                image: diagramUrl,
+                subject,
+                sourceFileUrl: fileUrl,
+                sourcePage: pageNum,
+                contentHash,
+                pineconeId: vecId,
+                createdBy: currentUser._id,
+              });
+
+              dbId = savedQuestion._id.toString();
+              pineconeId = vecId;
+            } catch (saveError) {
+              console.error("Failed to save question to DB:", saveError);
+              // Still send the question to frontend even if DB save fails
+              dbId = `temp_${questionIndex}`;
+            }
+          }
+
+          savedQuestionIds.push(dbId);
+
+          // Stream the question to the frontend
+          sendEvent("question", {
+            index: questionIndex,
+            dbId,
+            pineconeId,
+            question: questionText,
+            options,
+            correctIndex,
+            correctOption: item?.correctOption || null,
+            image: diagramUrl,
+            page: pageNum,
+            isExisting: !!existingQuestion,
+          });
+        }
+      }
+
+      // Update session progress
+      await UploadSession.findByIdAndUpdate(sessionId, {
+        totalQuestionsExtracted: savedQuestionIds.length,
+        questionIds: savedQuestionIds.filter(id => !id.startsWith('temp_')).map(id => id),
+      });
+
+      sendEvent("page_complete", { pageNum, questionsOnPage: extracted.length, totalSoFar: questionIndex });
+
+      // Save context for next iteration
+      previousPageDataUrl = dataUrl;
+      previousPageExtraction = extracted;
+    }
+
+    // Mark session as completed
+    await UploadSession.findByIdAndUpdate(sessionId, {
+      status: "completed",
+      completedAt: new Date(),
+      totalQuestionsExtracted: savedQuestionIds.length,
+      questionIds: savedQuestionIds.filter(id => !id.startsWith('temp_')),
+    });
+
+    sendEvent("complete", { 
+      sessionId,
+      totalQuestions: questionIndex,
+      savedToDb: savedQuestionIds.filter(id => !id.startsWith('temp_')).length
+    });
+    res.end();
+
+  } catch (error) {
+    console.error("Error in streaming PDF upload:", error);
+    
+    // Update session status to failed if we have a sessionId
+    if (sessionId) {
+      await UploadSession.findByIdAndUpdate(sessionId, {
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+    
+    sendEvent("error", { message: "Processing failed", details: error instanceof Error ? error.message : "Unknown error" });
+    res.end();
+  }
+};
+
+// Get upload history for the current user
+export const getUploadHistory = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { limit = "20", page = "1" } = req.query as { limit?: string; page?: string };
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+
+    const [sessions, total] = await Promise.all([
+      UploadSession.find({ createdBy: currentUser._id })
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .select("fileName subject startPage numPages totalQuestionsExtracted status createdAt completedAt"),
+      UploadSession.countDocuments({ createdBy: currentUser._id }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: sessions,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching upload history:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Get questions from a specific upload session
+export const getSessionQuestions = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { sessionId } = req.params;
+    
+    const session = await UploadSession.findOne({ 
+      _id: sessionId, 
+      createdBy: currentUser._id 
+    }).populate({
+      path: "questionIds",
+      select: "text options correctIndex image subject chapter difficulty topics tags description sourcePage",
+    });
+
+    if (!session) {
+      res.status(404).json({ success: false, message: "Session not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        session: {
+          id: session._id,
+          fileName: session.fileName,
+          subject: session.subject,
+          startPage: session.startPage,
+          numPages: session.numPages,
+          status: session.status,
+          createdAt: session.createdAt,
+          completedAt: session.completedAt,
+        },
+        questions: session.questionIds,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching session questions:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable } from "react-native";
 import { Image } from "expo-image";
 import { useQuestionEditorStore, SUBJECT_TO_CHAPTERS, type QuestionEditorState, type Difficulty } from "@/store/questionEditor";
 import { router } from "expo-router";
@@ -134,6 +134,7 @@ const QuestionEditor = () => {
   const selectedSubject = useQuestionEditorStore((s: QuestionEditorState) => s.selectedSubject);
   const addChapterForSubject = useQuestionEditorStore((s: QuestionEditorState) => s.addChapterForSubject);
   const customChaptersBySubject = useQuestionEditorStore((s: QuestionEditorState) => s.customChaptersBySubject);
+  const isStreaming = useQuestionEditorStore((s: QuestionEditorState) => s.isStreaming);
 
   const current = questions[selectedIndex];
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -185,7 +186,28 @@ const QuestionEditor = () => {
     return (
       <View style={{ flex: 1, padding: 16, gap: 12 }}>
         <Text style={{ fontSize: 18, fontWeight: "600" }}>Question Editor</Text>
-        <Text style={{ color: "#666" }}>No questions loaded. Go back and process a PDF first.</Text>
+        {isStreaming ? (
+          <View style={{ 
+            backgroundColor: "#f0f4ff", 
+            padding: 16, 
+            borderRadius: 12, 
+            gap: 12,
+            borderWidth: 1,
+            borderColor: "#c7d2fe",
+          }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <ActivityIndicator size="small" color="#4361ee" />
+              <Text style={{ color: "#4361ee", fontWeight: "600" }}>
+                Extracting questions from PDF...
+              </Text>
+            </View>
+            <Text style={{ color: "#666" }}>
+              Questions will appear here as they are extracted. Please wait...
+            </Text>
+          </View>
+        ) : (
+          <Text style={{ color: "#666" }}>No questions loaded. Go back and process a PDF first.</Text>
+        )}
         <Button title="Back to Question DB" onPress={() => router.replace("/(admin)/question-db")} />
       </View>
     );
@@ -243,10 +265,45 @@ const QuestionEditor = () => {
         </View>
       </View>
 
+      {/* Streaming Progress Banner */}
+      {isStreaming && (
+        <View style={{ 
+          backgroundColor: "#f0f4ff", 
+          padding: 12, 
+          borderRadius: 10, 
+          borderWidth: 1,
+          borderColor: "#c7d2fe",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+        }}>
+          <ActivityIndicator size="small" color="#4361ee" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#4361ee", fontWeight: "600", fontSize: 14 }}>
+              📄 Still extracting questions...
+            </Text>
+            <Text style={{ color: "#6b7280", fontSize: 12 }}>
+              {total} questions so far • New questions will appear automatically
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => router.replace("/(admin)/question-db")}
+            style={{
+              backgroundColor: "#4361ee",
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 6,
+            }}
+          >
+            <Text style={{ color: "#fff", fontSize: 12, fontWeight: "500" }}>View Progress</Text>
+          </Pressable>
+        </View>
+      )}
+
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Button title="Prev" disabled={selectedIndex <= 0} onPress={() => selectIndex(selectedIndex - 1)} />
         <Text>
-          {currentNumber} / {total}
+          {currentNumber} / {total}{isStreaming ? "+" : ""}
         </Text>
         <Button title="Next" disabled={selectedIndex >= total - 1} onPress={() => selectIndex(selectedIndex + 1)} />
       </View>
