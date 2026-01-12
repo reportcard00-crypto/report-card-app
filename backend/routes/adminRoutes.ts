@@ -24,10 +24,11 @@ import {
   deleteQuestionFromPaper,
   addQuestionToPaper,
 } from "../controllers/adminControllers";
-import { isAuthenticated, isAdmin } from "../middlewares/auth";
+import { isAuthenticated, isAdmin, isAdminOrTeacher } from "../middlewares/auth";
 
 const adminRouter = Router();
 
+// Admin-only routes
 adminRouter.get("/users", isAuthenticated, isAdmin, listUsers);
 adminRouter.patch("/users/:userId/role", isAuthenticated, isAdmin, updateUserRole);
 adminRouter.post("/question-pdfs/process", isAuthenticated, isAdmin, uploadQuestionPdf);
@@ -38,21 +39,23 @@ adminRouter.get("/upload-history/:sessionId/status", isAuthenticated, isAdmin, g
 adminRouter.get("/active-sessions", isAuthenticated, isAdmin, getActiveSessions);
 adminRouter.post("/questions/auto-metadata", isAuthenticated, isAdmin, generateQuestionMetadata);
 adminRouter.post("/questions/batch", isAuthenticated, isAdmin, saveQuestionsBatch);
-adminRouter.post("/papers/generate", isAuthenticated, isAdmin, generateQuestionPaper);
-adminRouter.post("/papers/generate-v1.5", isAuthenticated, isAdmin, generateQuestionPaperv1_5);
-adminRouter.post("/papers/generate-v2", isAuthenticated, isAdmin, generateQuestionPaperv2);
 
-// Question Paper CRUD routes
-adminRouter.post("/papers", isAuthenticated, isAdmin, createQuestionPaper);
-adminRouter.get("/papers", isAuthenticated, isAdmin, listQuestionPapers);
-adminRouter.get("/papers/:paperId", isAuthenticated, isAdmin, getQuestionPaper);
-adminRouter.put("/papers/:paperId", isAuthenticated, isAdmin, updateQuestionPaper);
-adminRouter.delete("/papers/:paperId", isAuthenticated, isAdmin, deleteQuestionPaper);
-adminRouter.post("/papers/:paperId/duplicate", isAuthenticated, isAdmin, duplicateQuestionPaper);
+// Paper generation routes - accessible by both admin and teacher
+adminRouter.post("/papers/generate", isAuthenticated, isAdminOrTeacher, generateQuestionPaper);
+adminRouter.post("/papers/generate-v1.5", isAuthenticated, isAdminOrTeacher, generateQuestionPaperv1_5);
+adminRouter.post("/papers/generate-v2", isAuthenticated, isAdminOrTeacher, generateQuestionPaperv2);
+
+// Question Paper CRUD routes - accessible by both admin and teacher
+adminRouter.post("/papers", isAuthenticated, isAdminOrTeacher, createQuestionPaper);
+adminRouter.get("/papers", isAuthenticated, isAdminOrTeacher, listQuestionPapers);
+adminRouter.get("/papers/:paperId", isAuthenticated, isAdminOrTeacher, getQuestionPaper);
+adminRouter.put("/papers/:paperId", isAuthenticated, isAdminOrTeacher, updateQuestionPaper);
+adminRouter.delete("/papers/:paperId", isAuthenticated, isAdminOrTeacher, deleteQuestionPaper);
+adminRouter.post("/papers/:paperId/duplicate", isAuthenticated, isAdminOrTeacher, duplicateQuestionPaper);
 // Question-level operations within a paper
-adminRouter.post("/papers/:paperId/questions", isAuthenticated, isAdmin, addQuestionToPaper);
-adminRouter.put("/papers/:paperId/questions/:questionId", isAuthenticated, isAdmin, updateQuestionInPaper);
-adminRouter.delete("/papers/:paperId/questions/:questionId", isAuthenticated, isAdmin, deleteQuestionFromPaper);
+adminRouter.post("/papers/:paperId/questions", isAuthenticated, isAdminOrTeacher, addQuestionToPaper);
+adminRouter.put("/papers/:paperId/questions/:questionId", isAuthenticated, isAdminOrTeacher, updateQuestionInPaper);
+adminRouter.delete("/papers/:paperId/questions/:questionId", isAuthenticated, isAdminOrTeacher, deleteQuestionFromPaper);
 
 export default adminRouter;
 

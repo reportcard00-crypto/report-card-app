@@ -1,32 +1,43 @@
 import { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, FlatList, ActivityIndicator, StyleSheet } from "react-native";
+import { Redirect } from "expo-router";
 import { listUsers, updateUserRole, type AdminUser } from "@/api/admin";
+import { store } from "@/utils";
 
 const ROLES: ("user" | "teacher" | "admin")[] = ["user", "teacher", "admin"];
 
 export default function UsersScreen() {
+  const [ready, setReady] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [refreshIndex, setRefreshIndex] = useState(0);
 
-  const fetchUsers = async () => {
-    setLoading(true);
-    try {
-      const resp = await listUsers({ search: search.trim() || undefined, role: roleFilter });
-      setUsers(resp.data);
-    } catch {
-      // errors are logged by api client
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    (async () => {
+      const role = await store.get("role");
+      setUserRole(role);
+      setReady(true);
+    })();
+  }, []);
 
   useEffect(() => {
+    if (!ready || userRole === "teacher") return;
+    const fetchUsers = async () => {
+      setLoading(true);
+      try {
+        const resp = await listUsers({ search: search.trim() || undefined, role: roleFilter });
+        setUsers(resp.data);
+      } catch {
+        // errors are logged by api client
+      } finally {
+        setLoading(false);
+      }
+    };
     fetchUsers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roleFilter, refreshIndex]);
+  }, [roleFilter, refreshIndex, ready, userRole, search]);
 
   const onSearch = () => {
     setRefreshIndex((i) => i + 1);
@@ -41,6 +52,19 @@ export default function UsersScreen() {
       )),
     [roleFilter]
   );
+
+  // Teachers shouldn't access this screen - redirect to paper-generator
+  if (ready && userRole === "teacher") {
+    return <Redirect href="/paper-generator" />;
+  }
+
+  if (!ready) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator style={{ marginTop: 24 }} />
+      </View>
+    );
+  }
 
   const renderItem = ({ item }: { item: AdminUser }) => {
     return (

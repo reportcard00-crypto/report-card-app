@@ -734,4 +734,313 @@ export async function deleteQuestionFromPaper(paperId: string, questionId: strin
   return resp.data as { success: boolean; message: string; questionsCount: number };
 }
 
+// ============================================================
+// Classroom Types and Functions
+// ============================================================
+
+export type ClassroomTeacher = {
+  _id: string;
+  name?: string;
+  phone: string;
+};
+
+export type ClassroomStudent = {
+  _id: string;
+  name?: string;
+  phone: string;
+  createdAt?: string;
+};
+
+export type ClassroomListItem = {
+  _id: string;
+  name: string;
+  description?: string;
+  teacher: ClassroomTeacher;
+  studentsCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Classroom = {
+  _id: string;
+  name: string;
+  description?: string;
+  teacher: ClassroomTeacher;
+  students: ClassroomStudent[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListClassroomsResponse = {
+  success: boolean;
+  data: ClassroomListItem[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+};
+
+// Create a new classroom
+export async function createClassroom(params: { name: string; description?: string }) {
+  const resp = await apiClient.post(`/api/classrooms`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name: string;
+      description?: string;
+      studentsCount: number;
+      createdAt: string;
+    };
+  };
+}
+
+// List classrooms
+export async function listClassrooms(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+} = {}) {
+  const resp = await apiClient.get<ListClassroomsResponse>("/api/classrooms", { params });
+  return resp.data;
+}
+
+// Get a single classroom by ID
+export async function getClassroom(classroomId: string) {
+  const resp = await apiClient.get(`/api/classrooms/${classroomId}`);
+  return resp.data as { success: boolean; data: Classroom };
+}
+
+// Update a classroom
+export async function updateClassroom(classroomId: string, params: {
+  name?: string;
+  description?: string | null;
+}) {
+  const resp = await apiClient.put(`/api/classrooms/${classroomId}`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name: string;
+      description?: string;
+      studentsCount: number;
+      updatedAt: string;
+    };
+  };
+}
+
+// Delete a classroom
+export async function deleteClassroom(classroomId: string) {
+  const resp = await apiClient.delete(`/api/classrooms/${classroomId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Search users to add to classroom
+export async function searchUsersForClassroom(query: string, limit: number = 10) {
+  const resp = await apiClient.get(`/api/classrooms/users/search`, { 
+    params: { q: query, limit } 
+  });
+  return resp.data as {
+    success: boolean;
+    data: Array<{
+      _id: string;
+      name?: string;
+      phone: string;
+      createdAt?: string;
+    }>;
+  };
+}
+
+// Add a student to classroom
+export async function addStudentToClassroom(
+  classroomId: string, 
+  params: { userId?: string; phone?: string; name?: string }
+) {
+  const resp = await apiClient.post(`/api/classrooms/${classroomId}/students`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name?: string;
+      phone: string;
+    };
+    studentsCount: number;
+    message: string;
+  };
+}
+
+// Remove a student from classroom
+export async function removeStudentFromClassroom(classroomId: string, userId: string) {
+  const resp = await apiClient.delete(`/api/classrooms/${classroomId}/students/${userId}`);
+  return resp.data as { success: boolean; message: string; studentsCount: number };
+}
+
+// ============================================================
+// Test Session Types and Functions
+// ============================================================
+
+export type TestSessionListItem = {
+  _id: string;
+  title: string;
+  status: "assigned" | "active" | "completed" | "cancelled";
+  timeLimitMinutes: number;
+  startedAt?: string;
+  endsAt?: string;
+  questionPaper: {
+    _id: string;
+    title: string;
+    subject: string;
+    questionsCount?: number;
+  };
+  classroom: {
+    _id: string;
+    name: string;
+    studentsCount?: number;
+  };
+  createdBy: {
+    _id: string;
+    name?: string;
+    phone: string;
+  };
+  totalStudents: number;
+  completedCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TestResult = {
+  _id: string;
+  student: {
+    _id: string;
+    name?: string;
+    phone: string;
+  };
+  score: number;
+  correctAnswers: number;
+  wrongAnswers: number;
+  totalQuestions: number;
+  attemptedQuestions: number;
+  status: "not_started" | "in_progress" | "submitted" | "timed_out";
+  startedAt?: string;
+  submittedAt?: string;
+  totalTimeTaken: number;
+};
+
+export type TestResultsData = {
+  testSession: any;
+  results: TestResult[];
+  stats: {
+    totalStudents: number;
+    participated: number;
+    completed: number;
+    inProgress: number;
+    averageScore: number;
+    highestScore: number;
+    lowestScore: number;
+  };
+};
+
+export type TestStatusData = {
+  _id: string;
+  status: string;
+  startedAt?: string;
+  endsAt?: string;
+  timeRemainingSeconds: number | null;
+  totalStudents: number;
+  submittedCount: number;
+  inProgressCount: number;
+  notStartedCount: number;
+  recentSubmissions: Array<{
+    student: { _id: string; name?: string; phone: string };
+    score: number;
+    attemptedQuestions: number;
+    correctAnswers: number;
+    submittedAt: string;
+    status: string;
+  }>;
+};
+
+// Assign a paper to a classroom
+export async function assignPaperToClassroom(params: {
+  paperId: string;
+  classroomId: string;
+  title?: string;
+}) {
+  const resp = await apiClient.post(`/api/tests/assign`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      title: string;
+      status: string;
+      classroom: string;
+      paper: string;
+      createdAt: string;
+    };
+    message: string;
+  };
+}
+
+// List test sessions
+export async function listTestSessions(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  classroomId?: string;
+} = {}) {
+  const resp = await apiClient.get(`/api/tests/sessions`, { params });
+  return resp.data as {
+    success: boolean;
+    data: TestSessionListItem[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  };
+}
+
+// Reassign test to different classroom
+export async function reassignTest(testId: string, classroomId: string) {
+  const resp = await apiClient.put(`/api/tests/sessions/${testId}/reassign`, { classroomId });
+  return resp.data as {
+    success: boolean;
+    data: { _id: string; classroom: string };
+    message: string;
+  };
+}
+
+// Start a test with time limit
+export async function startTest(testId: string, timeLimitMinutes: number) {
+  const resp = await apiClient.post(`/api/tests/sessions/${testId}/start`, { timeLimitMinutes });
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      status: string;
+      timeLimitMinutes: number;
+      startedAt: string;
+      endsAt: string;
+    };
+    message: string;
+  };
+}
+
+// Stop a test early
+export async function stopTest(testId: string) {
+  const resp = await apiClient.post(`/api/tests/sessions/${testId}/stop`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Get detailed test results
+export async function getTestResults(testId: string) {
+  const resp = await apiClient.get(`/api/tests/sessions/${testId}/results`);
+  return resp.data as { success: boolean; data: TestResultsData };
+}
+
+// Get real-time test status (for polling)
+export async function getTestStatus(testId: string) {
+  const resp = await apiClient.get(`/api/tests/sessions/${testId}/status`);
+  return resp.data as { success: boolean; data: TestStatusData };
+}
+
+// Delete a test session
+export async function deleteTestSession(testId: string) {
+  const resp = await apiClient.delete(`/api/tests/sessions/${testId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
 

@@ -1,11 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Alert, ActivityIndicator } from "react-native";
+import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { 
   listQuestionPapers, 
   deleteQuestionPaper, 
   duplicateQuestionPaper,
-  type QuestionPaperListItem 
+  listClassrooms,
+  assignPaperToClassroom,
+  startTest,
+  type QuestionPaperListItem,
+  type ClassroomListItem,
 } from "@/api/admin";
 import { SUBJECTS } from "@/store/questionEditor";
 
@@ -22,6 +26,20 @@ export default function PaperHistoryScreen() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+
+  // Assign modal state
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedPaper, setSelectedPaper] = useState<QuestionPaperListItem | null>(null);
+  const [classrooms, setClassrooms] = useState<ClassroomListItem[]>([]);
+  const [loadingClassrooms, setLoadingClassrooms] = useState(false);
+  const [selectedClassroom, setSelectedClassroom] = useState<string | null>(null);
+  const [isAssigning, setIsAssigning] = useState(false);
+
+  // Start test modal state
+  const [showStartModal, setShowStartModal] = useState(false);
+  const [assignedTestId, setAssignedTestId] = useState<string | null>(null);
+  const [timeLimitMinutes, setTimeLimitMinutes] = useState("30");
+  const [isStarting, setIsStarting] = useState(false);
 
   const fetchPapers = useCallback(async (showLoading = true) => {
     try {
@@ -43,6 +61,18 @@ export default function PaperHistoryScreen() {
       setRefreshing(false);
     }
   }, [page, search, subjectFilter, statusFilter]);
+
+  const fetchClassrooms = useCallback(async () => {
+    try {
+      setLoadingClassrooms(true);
+      const resp = await listClassrooms({ limit: 100 });
+      setClassrooms(resp.data);
+    } catch (e: any) {
+      Alert.alert("Error", "Failed to load classrooms");
+    } finally {
+      setLoadingClassrooms(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchPapers();
@@ -98,6 +128,88 @@ export default function PaperHistoryScreen() {
     router.push(`/paper-editor?id=${paper._id}` as any);
   };
 
+  const handleOpenAssignModal = (paper: QuestionPaperListItem) => {
+    setSelectedPaper(paper);
+    setSelectedClassroom(null);
+    setShowAssignModal(true);
+    fetchClassrooms();
+  };
+
+  const handleAssign = async () => {
+    if (!selectedPaper || !selectedClassroom) {
+      Alert.alert("Error", "Please select a classroom");
+      return;
+    }
+
+    try {
+      setIsAssigning(true);
+      const resp = await assignPaperToClassroom({
+        paperId: selectedPaper._id,
+        classroomId: selectedClassroom,
+        title: selectedPaper.title,
+      });
+      
+      setShowAssignModal(false);
+      setAssignedTestId(resp.data._id);
+      
+      Alert.alert(
+        "Test Assigned!",
+        "Would you like to start the test now?",
+        [
+          { 
+            text: "Start Now", 
+            onPress: () => setShowStartModal(true)
+          },
+          { 
+            text: "Start Later", 
+            onPress: () => {
+              Alert.alert("Success", "Test assigned. You can start it from the Tests screen.");
+              setAssignedTestId(null);
+            }
+          },
+        ]
+      );
+    } catch (e: any) {
+      Alert.alert("Error", e?.response?.data?.message || "Failed to assign test");
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  const handleStartTest = async () => {
+    if (!assignedTestId) return;
+    
+    const minutes = parseInt(timeLimitMinutes, 10);
+    if (isNaN(minutes) || minutes < 1) {
+      Alert.alert("Error", "Please enter a valid time limit (minimum 1 minute)");
+      return;
+    }
+
+    try {
+      setIsStarting(true);
+      await startTest(assignedTestId, minutes);
+      setShowStartModal(false);
+      setAssignedTestId(null);
+      setTimeLimitMinutes("30");
+      
+      Alert.alert(
+        "Test Started!",
+        `The test is now active for ${minutes} minutes. Students can start taking it.`,
+        [
+          { 
+            text: "View Live Results", 
+            onPress: () => router.push(`/test-results?id=${assignedTestId}` as any)
+          },
+          { text: "OK" },
+        ]
+      );
+    } catch (e: any) {
+      Alert.alert("Error", e?.response?.data?.message || "Failed to start test");
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -116,9 +228,14 @@ export default function PaperHistoryScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Paper History</Text>
-        <Pressable onPress={() => router.push("/paper-generator" as any)} style={styles.primaryBtn}>
-          <Text style={styles.primaryBtnText}>+ New Paper</Text>
-        </Pressable>
+        <View style={styles.headerBtns}>
+          <Pressable onPress={() => router.push("/test-sessions" as any)} style={styles.secondaryBtn}>
+            <Text style={styles.secondaryBtnText}>View Tests</Text>
+          </Pressable>
+          <Pressable onPress={() => router.push("/paper-generator" as any)} style={styles.primaryBtn}>
+            <Text style={styles.primaryBtnText}>+ New Paper</Text>
+          </Pressable>
+        </View>
       </View>
 
       {/* Search & Filters */}
@@ -241,14 +358,22 @@ export default function PaperHistoryScreen() {
 
                 <Text style={styles.paperDate}>Updated: {formatDate(paper.updatedAt)}</Text>
 
+                {/* Primary Actions */}
                 <View style={styles.paperActions}>
                   <Pressable onPress={() => handleEdit(paper)} style={[styles.actionBtn, styles.editBtn]}>
                     <Text style={styles.actionBtnText}>Edit</Text>
                   </Pressable>
-                  <Pressable onPress={() => handleDuplicate(paper)} style={[styles.actionBtn, styles.duplicateBtn]}>
+                  <Pressable onPress={() => handleOpenAssignModal(paper)} style={[styles.actionBtn, styles.assignBtn]}>
+                    <Text style={styles.assignBtnText}>Assign Test</Text>
+                  </Pressable>
+                </View>
+                
+                {/* Secondary Actions */}
+                <View style={styles.paperActionsSecondary}>
+                  <Pressable onPress={() => handleDuplicate(paper)} style={[styles.actionBtnSmall, styles.duplicateBtn]}>
                     <Text style={styles.duplicateBtnText}>Duplicate</Text>
                   </Pressable>
-                  <Pressable onPress={() => handleDelete(paper)} style={[styles.actionBtn, styles.deleteBtn]}>
+                  <Pressable onPress={() => handleDelete(paper)} style={[styles.actionBtnSmall, styles.deleteBtn]}>
                     <Text style={styles.deleteBtnText}>Delete</Text>
                   </Pressable>
                 </View>
@@ -278,16 +403,172 @@ export default function PaperHistoryScreen() {
           </Pressable>
         </View>
       )}
+
+      {/* Assign Modal */}
+      <Modal
+        visible={showAssignModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAssignModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Assign Test to Classroom</Text>
+            
+            {selectedPaper && (
+              <View style={styles.selectedPaperInfo}>
+                <Text style={styles.selectedPaperTitle}>{selectedPaper.title}</Text>
+                <Text style={styles.selectedPaperMeta}>
+                  {selectedPaper.subject} • {selectedPaper.questionsCount} questions
+                </Text>
+              </View>
+            )}
+
+            <Text style={styles.inputLabel}>Select Classroom *</Text>
+            
+            {loadingClassrooms ? (
+              <ActivityIndicator style={{ marginVertical: 20 }} />
+            ) : classrooms.length === 0 ? (
+              <View style={styles.noClassrooms}>
+                <Text style={styles.noClassroomsText}>No classrooms found</Text>
+                <Pressable 
+                  onPress={() => { setShowAssignModal(false); router.push("/classrooms" as any); }}
+                  style={styles.createClassroomBtn}
+                >
+                  <Text style={styles.createClassroomBtnText}>Create Classroom</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <ScrollView style={styles.classroomList} nestedScrollEnabled>
+                {classrooms.map((classroom) => (
+                  <Pressable
+                    key={classroom._id}
+                    onPress={() => setSelectedClassroom(classroom._id)}
+                    style={[
+                      styles.classroomOption,
+                      selectedClassroom === classroom._id && styles.classroomOptionSelected
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[
+                        styles.classroomOptionName,
+                        selectedClassroom === classroom._id && styles.classroomOptionNameSelected
+                      ]}>
+                        {classroom.name}
+                      </Text>
+                      <Text style={styles.classroomOptionMeta}>
+                        {classroom.studentsCount} student{classroom.studentsCount !== 1 ? "s" : ""}
+                      </Text>
+                    </View>
+                    {selectedClassroom === classroom._id && (
+                      <Text style={styles.checkmark}>✓</Text>
+                    )}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={styles.modalActions}>
+              <Pressable 
+                onPress={() => { setShowAssignModal(false); setSelectedClassroom(null); }}
+                style={[styles.modalBtn, styles.modalCancelBtn]}
+              >
+                <Text style={styles.modalCancelBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable 
+                onPress={handleAssign}
+                disabled={isAssigning || !selectedClassroom}
+                style={[
+                  styles.modalBtn, 
+                  styles.modalPrimaryBtn, 
+                  (!selectedClassroom || isAssigning) && { opacity: 0.5 }
+                ]}
+              >
+                <Text style={styles.modalPrimaryBtnText}>
+                  {isAssigning ? "Assigning..." : "Assign Test"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Start Test Modal */}
+      <Modal
+        visible={showStartModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setShowStartModal(false); setAssignedTestId(null); }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Start Test</Text>
+            <Text style={styles.modalSubtitle}>
+              Set the time limit for this test. Once started, students will be able to take the test.
+            </Text>
+
+            <Text style={styles.inputLabel}>Time Limit (minutes) *</Text>
+            <TextInput
+              value={timeLimitMinutes}
+              onChangeText={setTimeLimitMinutes}
+              placeholder="30"
+              keyboardType="numeric"
+              style={styles.modalInput}
+            />
+
+            <View style={styles.quickTimeButtons}>
+              {[15, 30, 45, 60, 90, 120].map((mins) => (
+                <Pressable
+                  key={mins}
+                  onPress={() => setTimeLimitMinutes(String(mins))}
+                  style={[
+                    styles.quickTimeBtn,
+                    timeLimitMinutes === String(mins) && styles.quickTimeBtnActive
+                  ]}
+                >
+                  <Text style={[
+                    styles.quickTimeBtnText,
+                    timeLimitMinutes === String(mins) && styles.quickTimeBtnTextActive
+                  ]}>
+                    {mins}m
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable 
+                onPress={() => { setShowStartModal(false); setAssignedTestId(null); }}
+                style={[styles.modalBtn, styles.modalCancelBtn]}
+              >
+                <Text style={styles.modalCancelBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable 
+                onPress={handleStartTest}
+                disabled={isStarting}
+                style={[styles.modalBtn, styles.modalStartBtn, isStarting && { opacity: 0.7 }]}
+              >
+                <Text style={styles.modalStartBtnText}>
+                  {isStarting ? "Starting..." : "Start Test"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { padding: 16, paddingBottom: 40 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 },
+  headerBtns: { flexDirection: "row", gap: 8 },
   title: { fontSize: 24, fontWeight: "700", color: "#111827" },
   primaryBtn: { backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 },
   primaryBtnText: { color: "#fff", fontWeight: "600" },
+  secondaryBtn: { backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: "#d1d5db" },
+  secondaryBtnText: { color: "#374151", fontWeight: "600" },
   filterSection: { flexDirection: "row", gap: 8, marginBottom: 12 },
   input: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 8, paddingHorizontal: 12, height: 42, backgroundColor: "#fff" },
   refreshBtn: { width: 42, height: 42, borderRadius: 8, backgroundColor: "#f3f4f6", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#d1d5db" },
@@ -317,18 +598,110 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 18, fontWeight: "700", color: "#111827" },
   statLabel: { fontSize: 11, color: "#9ca3af", textTransform: "uppercase" },
   paperDate: { fontSize: 12, color: "#9ca3af", marginBottom: 12 },
-  paperActions: { flexDirection: "row", gap: 8 },
-  actionBtn: { flex: 1, paddingVertical: 8, borderRadius: 6, alignItems: "center" },
+  paperActions: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  paperActionsSecondary: { flexDirection: "row", gap: 8 },
+  actionBtn: { flex: 1, paddingVertical: 10, borderRadius: 6, alignItems: "center" },
+  actionBtnSmall: { flex: 1, paddingVertical: 6, borderRadius: 6, alignItems: "center" },
   editBtn: { backgroundColor: "#111827" },
   actionBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  assignBtn: { backgroundColor: "#2563eb" },
+  assignBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
   duplicateBtn: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#d1d5db" },
-  duplicateBtnText: { color: "#374151", fontWeight: "600", fontSize: 13 },
+  duplicateBtnText: { color: "#374151", fontWeight: "500", fontSize: 12 },
   deleteBtn: { backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#fecaca" },
-  deleteBtnText: { color: "#dc2626", fontWeight: "600", fontSize: 13 },
+  deleteBtnText: { color: "#dc2626", fontWeight: "500", fontSize: 12 },
   pagination: { flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 16, marginTop: 24 },
   pageBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "#e5e7eb" },
   pageBtnDisabled: { opacity: 0.5 },
   pageBtnText: { color: "#374151", fontWeight: "500" },
   pageBtnTextDisabled: { color: "#9ca3af" },
   pageInfo: { fontSize: 14, color: "#6b7280" },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+    width: "100%",
+    maxWidth: 450,
+    maxHeight: "80%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  modalTitle: { fontSize: 20, fontWeight: "700", color: "#111827", marginBottom: 8 },
+  modalSubtitle: { fontSize: 14, color: "#6b7280", marginBottom: 20 },
+  selectedPaperInfo: {
+    backgroundColor: "#f3f4f6",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  selectedPaperTitle: { fontSize: 15, fontWeight: "600", color: "#111827", marginBottom: 4 },
+  selectedPaperMeta: { fontSize: 13, color: "#6b7280" },
+  inputLabel: { fontSize: 13, fontWeight: "600", color: "#374151", marginBottom: 8 },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    marginBottom: 12,
+    backgroundColor: "#f9fafb",
+  },
+  classroomList: {
+    maxHeight: 200,
+    marginBottom: 16,
+  },
+  classroomOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    marginBottom: 8,
+    backgroundColor: "#fff",
+  },
+  classroomOptionSelected: {
+    borderColor: "#2563eb",
+    backgroundColor: "#eff6ff",
+  },
+  classroomOptionName: { fontSize: 15, fontWeight: "500", color: "#111827" },
+  classroomOptionNameSelected: { color: "#2563eb" },
+  classroomOptionMeta: { fontSize: 12, color: "#6b7280", marginTop: 2 },
+  checkmark: { fontSize: 18, color: "#2563eb", fontWeight: "700" },
+  noClassrooms: { alignItems: "center", paddingVertical: 20 },
+  noClassroomsText: { fontSize: 14, color: "#6b7280", marginBottom: 12 },
+  createClassroomBtn: { backgroundColor: "#2563eb", paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6 },
+  createClassroomBtnText: { color: "#fff", fontWeight: "600" },
+  quickTimeButtons: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 20 },
+  quickTimeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+    backgroundColor: "#f3f4f6",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  quickTimeBtnActive: { backgroundColor: "#2563eb", borderColor: "#2563eb" },
+  quickTimeBtnText: { fontSize: 13, fontWeight: "500", color: "#374151" },
+  quickTimeBtnTextActive: { color: "#fff" },
+  modalActions: { flexDirection: "row", gap: 12, marginTop: 8 },
+  modalBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center" },
+  modalCancelBtn: { backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "#d1d5db" },
+  modalCancelBtnText: { color: "#374151", fontWeight: "600" },
+  modalPrimaryBtn: { backgroundColor: "#2563eb" },
+  modalPrimaryBtnText: { color: "#fff", fontWeight: "600" },
+  modalStartBtn: { backgroundColor: "#059669" },
+  modalStartBtnText: { color: "#fff", fontWeight: "600" },
 });

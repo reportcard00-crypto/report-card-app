@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import connectDatabse from "./config/db";
 import userRouter from "./routes/userRoutes";
 import adminRouter from "./routes/adminRoutes";
+import classroomRouter from "./routes/classroomRoutes";
+import testRouter from "./routes/testRoutes";
 import cors from "cors";
 import { Path2D as CanvasPath2D, DOMMatrix as CanvasDOMMatrix, Image as CanvasImage, ImageData as CanvasImageData } from "@napi-rs/canvas";
 import fileRoutes from "./routes/fileRoutes";
@@ -32,6 +34,8 @@ app.get("/", (req, res) => {
 });
 app.use("/api/user", userRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/classrooms", classroomRouter);
+app.use("/api/tests", testRouter);
 app.use("/api/file", fileRoutes);
 
 app.listen(3000, () => {

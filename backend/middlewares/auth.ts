@@ -76,3 +76,16 @@ export function isAdmin(req: CustomRequest, res: Response, next: NextFunction) {
   }
   next();
 }
+
+export function isAdminOrTeacher(req: CustomRequest, res: Response, next: NextFunction) {
+  const user = req.user as unknown as UserModel | undefined;
+  if (!user) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
+    return;
+  }
+  if (user.role !== ROLES.ADMIN && user.role !== ROLES.TEACHER) {
+    res.status(403).json({ success: false, message: "Admin or Teacher access required" });
+    return;
+  }
+  next();
+}

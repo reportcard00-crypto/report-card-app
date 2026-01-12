@@ -149,6 +149,12 @@ export const getProfileStatus = async (req: CustomRequest, res: Response) => {
           };
         }
       }
+    } else if (role === ROLES.ADMIN) {
+      // Admins should not be blocked by the student/teacher onboarding flows.
+      // Treat admin accounts as "profile complete" so the app won't route them to InitialProfile.
+      hasProfile = true;
+      profileType = null;
+      profileSummary = user.name ? { name: user.name } : null;
     }
 
     res.status(200).json({
@@ -172,7 +178,8 @@ export const completeUserProfile = async (req: CustomRequest, res: Response) => 
       return;
     }
 
-    if (user.role !== ROLES.USER) {
+    // Allow admins to proceed as well (they may be forced through this screen on older app versions).
+    if (user.role !== ROLES.USER && user.role !== ROLES.ADMIN) {
       res.status(400).json({ success: false, message: "Only students can complete this profile" });
       return;
     }
