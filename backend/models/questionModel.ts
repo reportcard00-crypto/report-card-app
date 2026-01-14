@@ -6,6 +6,13 @@ const questionSchema = new mongoose.Schema({
   options: { type: [String], default: [] },
   correctIndex: { type: Number, required: false },
   image: { type: String, required: false },
+  
+  // Question type: objective (MCQ) or subjective (open-ended)
+  questionType: { 
+    type: String, 
+    enum: ["objective", "subjective"], 
+    default: "objective" 
+  },
 
   // Admin metadata
   subject: { type: String, required: true },

@@ -290,6 +290,7 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
 
     type ExtractedQuestion = {
       question: string;
+      questionType: "objective" | "subjective";
       options: string[];
       correctOption?: string;
       image?: string | null;
@@ -321,9 +322,13 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
       // Build prompt for OpenRouter (multimodal)
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
-        "You are an expert at parsing printed, scanned exam pages. Extract all multiple-choice questions. " +
+        "You are an expert at parsing printed, scanned exam pages. Extract ALL questions - both multiple-choice (objective) and open-ended/written (subjective) questions. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string, the stem), `options` (array of strings in order), and, if clearly present, `correctOption` (string matching one of the options). " +
+        "`question` (string, the stem), `questionType` ('objective' for MCQ with options, 'subjective' for open-ended/essay/written questions), " +
+        "`options` (array of strings in order - ONLY for objective questions, empty array for subjective), " +
+        "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
+        "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
+        "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
         "If a diagram is associated with a question, set `hasDiagram` to true and also include `diagramBox` " +
         "as an object with normalized coordinates relative to the image dimensions: " +
         "{ x: number, y: number, width: number, height: number } with 0 <= values <= 1. " +
@@ -331,9 +336,11 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
         "Focus only on printed/typed content; ignore handwritten notes.";
 
       const firstPageInstruction =
-        "Extract questions from this page image and respond with a JSON array using this exact schema: " +
-        "[{ \"question\": string, \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
+        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page image and respond with a JSON array using this exact schema: " +
+        "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
         "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
+        "For subjective questions (essay, short-answer, numerical without options), set questionType to 'subjective' and options to empty array []. " +
+        "For objective questions (MCQ with options), set questionType to 'objective' and include all options. " +
         "Do not include any text outside the JSON. If no questions found, return []. " +
         "When a diagram is present, provide a precise `diagramBox` around the diagram only.";
 
@@ -341,8 +348,9 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
         "The next page may contain the continuation of a question that started on the previous page. " +
         "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, and (3) the current page image. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
+        "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
-        "Output must be a JSON array with the same exact schema as before. " +
+        "Output must be a JSON array with the same exact schema as before (including questionType field). " +
         "If nothing new or continued is found, return [].";
 
       const payload = {
@@ -445,14 +453,24 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
             }
           }
         }
+        const options = Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [];
+        // Determine question type - default to objective if has options, subjective if no options
+        const questionType: "objective" | "subjective" = 
+          item?.questionType === "subjective" || (options.length === 0) ? "subjective" : "objective";
+        
         const q: ExtractedQuestion = {
           question: String(item?.question || "").trim(),
-          options: Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [],
-          correctOption: item?.correctOption ? String(item.correctOption) : undefined,
+          questionType,
+          options,
+          correctOption: questionType === "objective" && item?.correctOption ? String(item.correctOption) : undefined,
           image: item?.hasDiagram ? diagramUrl : null,
           page: pageNum,
         };
-        if (q.question && q.options.length > 0 && !seenQuestions.has(q.question)) {
+        // Allow subjective questions with no options, or objective questions with options
+        const isValidQuestion = q.question && 
+          ((questionType === "objective" && options.length > 0) || questionType === "subjective");
+        
+        if (isValidQuestion && !seenQuestions.has(q.question)) {
           seenQuestions.add(q.question);
           pageResults.push(q);
         }
@@ -646,9 +664,13 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
       // Build prompt for OpenRouter (multimodal)
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
-        "You are an expert at parsing printed, scanned exam pages. Extract all multiple-choice questions. " +
+        "You are an expert at parsing printed, scanned exam pages. Extract ALL questions - both multiple-choice (objective) and open-ended/written (subjective) questions. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string, the stem), `options` (array of strings in order), and, if clearly present, `correctOption` (string matching one of the options). " +
+        "`question` (string, the stem), `questionType` ('objective' for MCQ with options, 'subjective' for open-ended/essay/written questions), " +
+        "`options` (array of strings in order - ONLY for objective questions, empty array for subjective), " +
+        "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
+        "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
+        "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
         "If a diagram is associated with a question, set `hasDiagram` to true and also include `diagramBox` " +
         "as an object with normalized coordinates relative to the image dimensions: " +
         "{ x: number, y: number, width: number, height: number } with 0 <= values <= 1. " +
@@ -656,9 +678,11 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
         "Focus only on printed/typed content; ignore handwritten notes.";
 
       const firstPageInstruction =
-        "Extract questions from this page image and respond with a JSON array using this exact schema: " +
-        "[{ \"question\": string, \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
+        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page image and respond with a JSON array using this exact schema: " +
+        "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
         "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
+        "For subjective questions (essay, short-answer, numerical without options), set questionType to 'subjective' and options to empty array []. " +
+        "For objective questions (MCQ with options), set questionType to 'objective' and include all options. " +
         "Do not include any text outside the JSON. If no questions found, return []. " +
         "When a diagram is present, provide a precise `diagramBox` around the diagram only.";
 
@@ -666,8 +690,9 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
         "The next page may contain the continuation of a question that started on the previous page. " +
         "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, and (3) the current page image. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
+        "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
-        "Output must be a JSON array with the same exact schema as before. " +
+        "Output must be a JSON array with the same exact schema as before (including questionType field). " +
         "If nothing new or continued is found, return [].";
 
       const payload = {
@@ -764,14 +789,21 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
 
         const questionText = String(item?.question || "").trim();
         const options: string[] = Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [];
+        // Determine question type - default to objective if has options, subjective if no options
+        const questionType: "objective" | "subjective" = 
+          item?.questionType === "subjective" || (options.length === 0) ? "subjective" : "objective";
 
-        if (questionText && options.length > 0 && !seenQuestions.has(questionText)) {
+        // Allow subjective questions with no options, or objective questions with options
+        const isValidQuestion = questionText && 
+          ((questionType === "objective" && options.length > 0) || questionType === "subjective");
+
+        if (isValidQuestion && !seenQuestions.has(questionText)) {
           seenQuestions.add(questionText);
           questionIndex++;
 
-          // Determine correct index
+          // Determine correct index (only for objective questions)
           let correctIndex: number | undefined;
-          if (item?.correctOption) {
+          if (questionType === "objective" && item?.correctOption) {
             const correctText = String(item.correctOption);
             const foundIdx = options.findIndex((o) => o.trim() === correctText.trim());
             if (foundIdx >= 0) correctIndex = foundIdx;
@@ -808,6 +840,7 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
               const metadata: Record<string, string | number | boolean | string[]> = {
                 subject,
                 hasImage: Boolean(diagramUrl),
+                questionType,
               };
 
               // Upsert to Pinecone
@@ -823,6 +856,7 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
                 options,
                 correctIndex,
                 image: diagramUrl,
+                questionType,
                 subject,
                 sourceFileUrl: fileUrl,
                 sourcePage: pageNum,
@@ -848,6 +882,7 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
             dbId,
             pineconeId,
             question: questionText,
+            questionType,
             options,
             correctIndex,
             correctOption: item?.correctOption || null,
@@ -2944,6 +2979,7 @@ export const createQuestionPaper = async (req: CustomRequest, res: Response) => 
     const {
       title,
       description,
+      questionType,
       subject,
       chapter,
       overallDifficulty,
@@ -2964,9 +3000,11 @@ export const createQuestionPaper = async (req: CustomRequest, res: Response) => 
       return;
     }
 
+    const paperQuestionType = questionType === "subjective" ? "subjective" : "objective";
     const paper = await QuestionPaper.create({
       title: String(title).trim(),
       description: description ? String(description).trim() : undefined,
+      questionType: paperQuestionType,
       subject: String(subject).trim(),
       chapter: chapter ? String(chapter).trim() : undefined,
       overallDifficulty: overallDifficulty || undefined,
@@ -2979,6 +3017,7 @@ export const createQuestionPaper = async (req: CustomRequest, res: Response) => 
         options: Array.isArray(q.options) ? q.options.map((o: any) => String(o)) : [],
         correctIndex: typeof q.correctIndex === "number" ? q.correctIndex : undefined,
         image: q.image || undefined,
+        questionType: q.questionType === "subjective" ? "subjective" : paperQuestionType,
         subject: String(q.subject || subject).trim(),
         chapter: q.chapter || undefined,
         difficulty: q.difficulty || undefined,
@@ -3038,7 +3077,7 @@ export const listQuestionPapers = async (req: CustomRequest, res: Response) => {
         .sort({ updatedAt: -1 })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
-        .select("title description subject chapter modelVersion status createdAt updatedAt")
+        .select("title description questionType subject chapter modelVersion status createdAt updatedAt")
         .lean()
         .then((papers) =>
           papers.map((p: any) => ({

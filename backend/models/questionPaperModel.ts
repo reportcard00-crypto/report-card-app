@@ -6,6 +6,12 @@ const paperQuestionSchema = new mongoose.Schema({
   options: { type: [String], default: [] },
   correctIndex: { type: Number, required: false },
   image: { type: String, required: false },
+  // Question type: objective (MCQ) or subjective (open-ended)
+  questionType: { 
+    type: String, 
+    enum: ["objective", "subjective"], 
+    default: "objective" 
+  },
   subject: { type: String, required: true },
   chapter: { type: String, required: false },
   difficulty: { type: String, enum: ["easy", "medium", "hard"], required: false },
@@ -23,6 +29,14 @@ const questionPaperSchema = new mongoose.Schema({
   // Paper metadata
   title: { type: String, required: true },
   description: { type: String, required: false },
+  
+  // Paper type: objective (MCQ) or subjective (open-ended questions)
+  // Subjective papers cannot be assigned to classrooms for auto-evaluation
+  paperType: { 
+    type: String, 
+    enum: ["objective", "subjective"], 
+    default: "objective" 
+  },
   
   // Generation parameters (for reference)
   subject: { type: String, required: true },
