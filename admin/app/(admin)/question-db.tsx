@@ -326,6 +326,7 @@ const QuestionDB = () => {
               addStreamedQuestion({
                 dbId: event.dbId,
                 question: event.question,
+                questionType: event.questionType,
                 options: event.options,
                 correctIndex: event.correctIndex,
                 image: event.image,

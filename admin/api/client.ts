@@ -1,7 +1,7 @@
 import { store } from "@/utils";
 import axios from "axios";
 
-export const baseUrl = "http://localhost:3000";
+export const baseUrl = "https://api.msnacademy.in";
 console.log(baseUrl);
 const apiClient = axios.create({
     baseURL: baseUrl,

@@ -132,13 +132,16 @@ export async function getActiveSessions() {
   };
 }
 
+// Question type for distinguishing objective (MCQ) from subjective (open-ended)
+export type QuestionType = "objective" | "subjective";
+
 // Streaming question extraction types
 export type StreamEvent = 
   | { type: "session_started"; sessionId: string; fileName: string; subject: string; startPage: number; numPages: number }
   | { type: "progress"; message: string; step: string; totalPages?: number; startPage?: number; endPage?: number; totalPdfPages?: number }
   | { type: "page_start"; pageNum: number; totalPages: number; currentPage: number; pagesCompleted?: number; pagesRemaining?: number }
   | { type: "page_error"; pageNum: number; error: string }
-  | { type: "question"; index: number; dbId: string; pineconeId?: string; question: string; options: string[]; correctIndex?: number; correctOption?: string; image?: string | null; page: number; isExisting: boolean }
+  | { type: "question"; index: number; dbId: string; pineconeId?: string; question: string; questionType?: QuestionType; options: string[]; correctIndex?: number; correctOption?: string; image?: string | null; page: number; isExisting: boolean }
   | { type: "page_complete"; pageNum: number; questionsOnPage: number; totalSoFar: number }
   | { type: "complete"; sessionId: string; totalQuestions: number; savedToDb: number }
   | { type: "error"; message: string; details?: string };
@@ -355,6 +358,7 @@ export type GeneratedPaperItem = {
   text: string;
   options: string[];
   correctIndex: number;
+  questionType?: QuestionType;
   subject: string;
   chapter?: string | null;
   topics?: string[];
@@ -397,6 +401,7 @@ export type GeneratedPaperItemV1_5 = {
   text: string;
   options: string[];
   correctIndex: number;
+  questionType?: QuestionType;
   subject: string;
   chapter?: string | null;
   topics?: string[];
@@ -454,6 +459,7 @@ export type GeneratedPaperItemV2 = {
   text: string;
   options: string[];
   correctIndex: number;
+  questionType?: QuestionType;
   subject: string;
   chapter?: string | null;
   topics?: string[];
@@ -523,6 +529,7 @@ export type PaperQuestion = {
   options: string[];
   correctIndex?: number;
   image?: string;
+  questionType?: QuestionType; // objective (MCQ) or subjective (open-ended)
   subject: string;
   chapter?: string | null;
   difficulty?: "easy" | "medium" | "hard";
@@ -539,6 +546,7 @@ export type QuestionPaper = {
   _id: string;
   title: string;
   description?: string;
+  paperType?: QuestionType; // objective (MCQ) or subjective (open-ended) - subjective papers cannot be assigned to classrooms
   subject: string;
   chapter?: string | null;
   overallDifficulty?: "easy" | "medium" | "hard" | null;
@@ -574,6 +582,7 @@ export type QuestionPaperListItem = {
   _id: string;
   title: string;
   description?: string;
+  questionType?: QuestionType; // objective (MCQ) or subjective (open-ended)
   subject: string;
   chapter?: string | null;
   modelVersion?: string;
@@ -593,6 +602,7 @@ export type ListPapersResponse = {
 export async function createQuestionPaper(params: {
   title: string;
   description?: string;
+  questionType?: QuestionType; // objective (MCQ) or subjective (open-ended)
   subject: string;
   chapter?: string | null;
   overallDifficulty?: "easy" | "medium" | "hard" | null;
@@ -605,6 +615,7 @@ export async function createQuestionPaper(params: {
     options: string[];
     correctIndex?: number;
     image?: string;
+    questionType?: QuestionType;
     subject?: string;
     chapter?: string | null;
     difficulty?: "easy" | "medium" | "hard";

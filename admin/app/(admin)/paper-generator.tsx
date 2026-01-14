@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Platform, Alert } from "react-native";
 import { useRouter } from "expo-router";
-import { SUBJECTS, SUBJECT_TO_CHAPTERS, useQuestionEditorStore } from "@/store/questionEditor";
+import { SUBJECTS, SUBJECT_TO_CHAPTERS, useQuestionEditorStore, type QuestionType } from "@/store/questionEditor";
 import { 
   generateQuestionPaper, 
   generateQuestionPaperV1_5, 
@@ -14,6 +14,10 @@ import {
 
 const DIFFICULTIES: ("easy" | "medium" | "hard")[] = ["easy", "medium", "hard"];
 const TAG_SUGGESTIONS = ["jee", "jee mains", "jee advanced", "neet", "boards"];
+const PAPER_TYPES: { value: QuestionType; label: string; description: string }[] = [
+  { value: "objective", label: "📝 Objective (MCQ)", description: "Multiple choice questions - can be assigned to classrooms for auto-evaluation" },
+  { value: "subjective", label: "✍️ Subjective", description: "Essay/short-answer questions - cannot be auto-evaluated" },
+];
 
 type ModelVersion = "v1" | "v1.5" | "v2";
 const MODEL_OPTIONS: { value: ModelVersion; label: string; endpoint: string }[] = [
@@ -27,6 +31,7 @@ export default function PaperGeneratorScreen() {
   const customChaptersBySubject = useQuestionEditorStore((s) => s.customChaptersBySubject);
   const addChapterForSubject = useQuestionEditorStore((s) => s.addChapterForSubject);
 
+  const [paperType, setPaperType] = useState<QuestionType>("objective");
   const [subject, setSubject] = useState<string | null>(null);
   const [chapter, setChapter] = useState<string | null>(null);
   const [overallDifficulty, setOverallDifficulty] = useState<"easy" | "medium" | "hard" | null>(null);
@@ -174,6 +179,7 @@ export default function PaperGeneratorScreen() {
       const resp = await createQuestionPaper({
         title,
         description: description || undefined,
+        questionType: paperType,
         subject,
         chapter: chapter || undefined,
         overallDifficulty: overallDifficulty || undefined,
@@ -187,8 +193,9 @@ export default function PaperGeneratorScreen() {
         },
         questions: results.map((q) => ({
           text: q.text,
-          options: q.options,
-          correctIndex: q.correctIndex,
+          questionType: paperType,
+          options: paperType === "subjective" ? [] : q.options,
+          correctIndex: paperType === "subjective" ? undefined : q.correctIndex,
           subject: q.subject,
           chapter: q.chapter || undefined,
           difficulty: q.difficulty,
@@ -219,6 +226,35 @@ export default function PaperGeneratorScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Question Paper Generator</Text>
+
+      {/* Paper Type Selection */}
+      <View style={styles.section}>
+        <Text style={styles.label}>Paper Type</Text>
+        <View style={styles.rowWrap}>
+          {PAPER_TYPES.map((pt) => (
+            <Pressable
+              key={pt.value}
+              onPress={() => setPaperType(pt.value)}
+              style={[
+                styles.chip,
+                paperType === pt.value && (pt.value === "objective" ? styles.chipActive : styles.chipSubjective),
+              ]}
+            >
+              <Text style={[styles.chipText, paperType === pt.value && styles.chipTextActive]}>{pt.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.helper}>
+          {PAPER_TYPES.find((pt) => pt.value === paperType)?.description}
+        </Text>
+        {paperType === "subjective" && (
+          <View style={styles.subjectiveWarning}>
+            <Text style={styles.subjectiveWarningText}>
+              ⚠️ Subjective papers cannot be assigned to classrooms for auto-evaluation. They are for printing/manual evaluation only.
+            </Text>
+          </View>
+        )}
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.label}>Model Version</Text>
@@ -419,16 +455,31 @@ export default function PaperGeneratorScreen() {
               const correct = typeof q.correctIndex === "number" ? q.correctIndex : -1;
               return (
                 <View key={`${idx}-${q.text.slice(0, 16)}`} style={styles.card}>
-                  <Text style={styles.qIndex}>Q{idx + 1}.</Text>
-                  <Text style={styles.qText}>{q.text}</Text>
-                  <View style={{ gap: 6, marginTop: 8 }}>
-                    {Array.isArray(q.options) && q.options.map((opt, i) => (
-                      <View key={i} style={[styles.optRow, i === correct && styles.optCorrect]}>
-                        <Text style={[styles.optBullet, i === correct && styles.optBulletCorrect]}>{String.fromCharCode(65 + i)}.</Text>
-                        <Text style={[styles.optText, i === correct && styles.optTextCorrect]}>{opt}</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Text style={styles.qIndex}>Q{idx + 1}.</Text>
+                    {paperType === "subjective" && (
+                      <View style={styles.subjectiveBadge}>
+                        <Text style={styles.subjectiveBadgeText}>Subjective</Text>
                       </View>
-                    ))}
+                    )}
                   </View>
+                  <Text style={styles.qText}>{q.text}</Text>
+                  {/* Only show options for objective papers */}
+                  {paperType === "objective" && (
+                    <View style={{ gap: 6, marginTop: 8 }}>
+                      {Array.isArray(q.options) && q.options.map((opt, i) => (
+                        <View key={i} style={[styles.optRow, i === correct && styles.optCorrect]}>
+                          <Text style={[styles.optBullet, i === correct && styles.optBulletCorrect]}>{String.fromCharCode(65 + i)}.</Text>
+                          <Text style={[styles.optText, i === correct && styles.optTextCorrect]}>{opt}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  {paperType === "subjective" && (
+                    <View style={styles.answerSpace}>
+                      <Text style={styles.answerSpaceText}>📝 Answer space for written response</Text>
+                    </View>
+                  )}
                   <View style={styles.metaRow}>
                     <Text style={styles.metaPill}>{q.difficulty}</Text>
                     {!!q.chapter && <Text style={styles.metaPill}>{q.chapter}</Text>}
@@ -457,8 +508,16 @@ const styles = StyleSheet.create({
   inlineControls: { flexDirection: "row", gap: 8, alignItems: "center" },
   chip: { borderWidth: 1, borderColor: "#ddd", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   chipActive: { backgroundColor: "#111827", borderColor: "#111827" },
+  chipSubjective: { backgroundColor: "#10b981", borderColor: "#10b981" },
   chipText: { color: "#111827" },
   chipTextActive: { color: "#fff", fontWeight: "600" },
+  // Subjective paper styles
+  subjectiveWarning: { backgroundColor: "#fef3c7", borderWidth: 1, borderColor: "#fcd34d", borderRadius: 8, padding: 10, marginTop: 4 },
+  subjectiveWarningText: { color: "#92400e", fontSize: 13 },
+  subjectiveBadge: { backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#a7f3d0", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 },
+  subjectiveBadgeText: { color: "#065f46", fontSize: 11, fontWeight: "500" },
+  answerSpace: { backgroundColor: "#f9fafb", borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 8, padding: 16, marginTop: 8, borderStyle: "dashed" },
+  answerSpaceText: { color: "#9ca3af", fontStyle: "italic", textAlign: "center" },
   suggestion: { backgroundColor: "#f3f4f6", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: "#e5e7eb" },
   suggestionText: { color: "#111827" },
   removeChip: { borderColor: "#fecaca", backgroundColor: "#fff1f2" },

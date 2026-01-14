@@ -165,8 +165,9 @@ export default function PaperEditorScreen() {
       Alert.alert("Error", "Question text is required");
       return;
     }
-    if (editingQuestion.options.filter(o => o.trim()).length < 2) {
-      Alert.alert("Error", "At least 2 options are required");
+    // Only validate options for objective questions
+    if (editingQuestion.questionType !== "subjective" && editingQuestion.options.filter(o => o.trim()).length < 2) {
+      Alert.alert("Error", "At least 2 options are required for objective questions");
       return;
     }
 
@@ -248,8 +249,9 @@ export default function PaperEditorScreen() {
       Alert.alert("Error", "Question text is required");
       return;
     }
-    if (newQuestion.options.filter(o => o.trim()).length < 2) {
-      Alert.alert("Error", "At least 2 options are required");
+    // Only validate options for objective questions (non-subjective papers)
+    if (paper.paperType !== "subjective" && newQuestion.options.filter(o => o.trim()).length < 2) {
+      Alert.alert("Error", "At least 2 options are required for objective questions");
       return;
     }
 
@@ -373,6 +375,17 @@ export default function PaperEditorScreen() {
             </Text>
           </View>
           <View style={styles.paperHeaderRight}>
+            {/* Paper Type Badge */}
+            {paper.paperType === "subjective" && (
+              <View style={[styles.statusBadge, { backgroundColor: "#ecfdf5", borderColor: "#a7f3d0" }]}>
+                <Text style={[styles.statusText, { color: "#065f46" }]}>✍️ Subjective</Text>
+              </View>
+            )}
+            {paper.paperType !== "subjective" && (
+              <View style={[styles.statusBadge, { backgroundColor: "#eff6ff", borderColor: "#93c5fd" }]}>
+                <Text style={[styles.statusText, { color: "#1d4ed8" }]}>📝 Objective</Text>
+              </View>
+            )}
             <View style={[styles.statusBadge, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
               <Text style={[styles.statusText, { color: statusColors.text }]}>{paper.status}</Text>
             </View>
@@ -426,16 +439,26 @@ export default function PaperEditorScreen() {
                   </View>
                 )}
 
-                <View style={styles.optionsContainer}>
-                  {q.options.map((opt, i) => (
-                    <View key={i} style={[styles.optionRow, i === correct && styles.optionCorrect]}>
-                      <Text style={[styles.optionLetter, i === correct && styles.optionLetterCorrect]}>
-                        {String.fromCharCode(65 + i)}.
-                      </Text>
-                      <Text style={[styles.optionText, i === correct && styles.optionTextCorrect]}>{opt}</Text>
-                    </View>
-                  ))}
-                </View>
+                {/* Only show options for objective questions */}
+                {q.questionType !== "subjective" && q.options && q.options.length > 0 && (
+                  <View style={styles.optionsContainer}>
+                    {q.options.map((opt, i) => (
+                      <View key={i} style={[styles.optionRow, i === correct && styles.optionCorrect]}>
+                        <Text style={[styles.optionLetter, i === correct && styles.optionLetterCorrect]}>
+                          {String.fromCharCode(65 + i)}.
+                        </Text>
+                        <Text style={[styles.optionText, i === correct && styles.optionTextCorrect]}>{opt}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                
+                {/* Show answer space for subjective questions */}
+                {q.questionType === "subjective" && (
+                  <View style={styles.answerSpace}>
+                    <Text style={styles.answerSpaceText}>📝 Subjective - Answer space for written response</Text>
+                  </View>
+                )}
 
                 <View style={styles.questionMeta}>
                   {q.difficulty && (
@@ -545,38 +568,52 @@ export default function PaperEditorScreen() {
                     )}
                   </View>
 
-                  <View style={styles.formGroup}>
-                    <Text style={styles.formLabel}>Options *</Text>
-                    {editingQuestion.options.map((opt, i) => (
-                      <View key={i} style={styles.optionInputRow}>
-                        <Pressable
-                          onPress={() => setEditingQuestion({ ...editingQuestion, correctIndex: i })}
-                          style={[
-                            styles.correctRadio,
-                            editingQuestion.correctIndex === i && styles.correctRadioActive,
-                          ]}
-                        >
-                          <Text style={[
-                            styles.correctRadioText,
-                            editingQuestion.correctIndex === i && styles.correctRadioTextActive,
-                          ]}>
-                            {String.fromCharCode(65 + i)}
-                          </Text>
-                        </Pressable>
-                        <TextInput
-                          style={[styles.input, { flex: 1 }]}
-                          value={opt}
-                          onChangeText={(t) => {
-                            const newOpts = [...editingQuestion.options];
-                            newOpts[i] = t;
-                            setEditingQuestion({ ...editingQuestion, options: newOpts });
-                          }}
-                          placeholder={`Option ${String.fromCharCode(65 + i)}`}
-                        />
+                  {/* Only show options for objective questions */}
+                  {editingQuestion.questionType !== "subjective" && (
+                    <View style={styles.formGroup}>
+                      <Text style={styles.formLabel}>Options *</Text>
+                      {editingQuestion.options.map((opt, i) => (
+                        <View key={i} style={styles.optionInputRow}>
+                          <Pressable
+                            onPress={() => setEditingQuestion({ ...editingQuestion, correctIndex: i })}
+                            style={[
+                              styles.correctRadio,
+                              editingQuestion.correctIndex === i && styles.correctRadioActive,
+                            ]}
+                          >
+                            <Text style={[
+                              styles.correctRadioText,
+                              editingQuestion.correctIndex === i && styles.correctRadioTextActive,
+                            ]}>
+                              {String.fromCharCode(65 + i)}
+                            </Text>
+                          </Pressable>
+                          <TextInput
+                            style={[styles.input, { flex: 1 }]}
+                            value={opt}
+                            onChangeText={(t) => {
+                              const newOpts = [...editingQuestion.options];
+                              newOpts[i] = t;
+                              setEditingQuestion({ ...editingQuestion, options: newOpts });
+                            }}
+                            placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                          />
+                        </View>
+                      ))}
+                      <Text style={styles.formHint}>Click the letter to mark as correct answer</Text>
+                    </View>
+                  )}
+                  
+                  {/* Show subjective indicator */}
+                  {editingQuestion.questionType === "subjective" && (
+                    <View style={styles.formGroup}>
+                      <View style={styles.subjectiveIndicator}>
+                        <Text style={styles.subjectiveIndicatorText}>
+                          ✍️ This is a subjective question - options are not applicable
+                        </Text>
                       </View>
-                    ))}
-                    <Text style={styles.formHint}>Click the letter to mark as correct answer</Text>
-                  </View>
+                    </View>
+                  )}
 
                   <View style={styles.formGroup}>
                     <Text style={styles.formLabel}>Difficulty</Text>
@@ -772,38 +809,52 @@ export default function PaperEditorScreen() {
                 )}
               </View>
 
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Options *</Text>
-                {newQuestion.options.map((opt, i) => (
-                  <View key={i} style={styles.optionInputRow}>
-                    <Pressable
-                      onPress={() => setNewQuestion({ ...newQuestion, correctIndex: i })}
-                      style={[
-                        styles.correctRadio,
-                        newQuestion.correctIndex === i && styles.correctRadioActive,
-                      ]}
-                    >
-                      <Text style={[
-                        styles.correctRadioText,
-                        newQuestion.correctIndex === i && styles.correctRadioTextActive,
-                      ]}>
-                        {String.fromCharCode(65 + i)}
-                      </Text>
-                    </Pressable>
-                    <TextInput
-                      style={[styles.input, { flex: 1 }]}
-                      value={opt}
-                      onChangeText={(t) => {
-                        const newOpts = [...newQuestion.options];
-                        newOpts[i] = t;
-                        setNewQuestion({ ...newQuestion, options: newOpts });
-                      }}
-                      placeholder={`Option ${String.fromCharCode(65 + i)}`}
-                    />
+              {/* Only show options for objective papers */}
+              {paper.paperType !== "subjective" && (
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Options *</Text>
+                  {newQuestion.options.map((opt, i) => (
+                    <View key={i} style={styles.optionInputRow}>
+                      <Pressable
+                        onPress={() => setNewQuestion({ ...newQuestion, correctIndex: i })}
+                        style={[
+                          styles.correctRadio,
+                          newQuestion.correctIndex === i && styles.correctRadioActive,
+                        ]}
+                      >
+                        <Text style={[
+                          styles.correctRadioText,
+                          newQuestion.correctIndex === i && styles.correctRadioTextActive,
+                        ]}>
+                          {String.fromCharCode(65 + i)}
+                        </Text>
+                      </Pressable>
+                      <TextInput
+                        style={[styles.input, { flex: 1 }]}
+                        value={opt}
+                        onChangeText={(t) => {
+                          const newOpts = [...newQuestion.options];
+                          newOpts[i] = t;
+                          setNewQuestion({ ...newQuestion, options: newOpts });
+                        }}
+                        placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                      />
+                    </View>
+                  ))}
+                  <Text style={styles.formHint}>Click the letter to mark as correct answer</Text>
+                </View>
+              )}
+              
+              {/* Show subjective indicator for subjective papers */}
+              {paper.paperType === "subjective" && (
+                <View style={styles.formGroup}>
+                  <View style={styles.subjectiveIndicator}>
+                    <Text style={styles.subjectiveIndicatorText}>
+                      ✍️ This is a subjective paper - options are not applicable
+                    </Text>
                   </View>
-                ))}
-                <Text style={styles.formHint}>Click the letter to mark as correct answer</Text>
-              </View>
+                </View>
+              )}
 
               <View style={styles.formGroup}>
                 <Text style={styles.formLabel}>Difficulty</Text>
@@ -1153,5 +1204,10 @@ const styles = StyleSheet.create({
   inputWithBtn: { flexDirection: "row", gap: 8 },
   addBtn: { backgroundColor: "#111827", paddingHorizontal: 16, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   addBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  // Subjective question styles
+  answerSpace: { backgroundColor: "#f9fafb", borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 8, padding: 16, marginTop: 8, marginBottom: 8, borderStyle: "dashed" },
+  answerSpaceText: { color: "#9ca3af", fontStyle: "italic", textAlign: "center" },
+  subjectiveIndicator: { backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#a7f3d0", borderRadius: 8, padding: 12 },
+  subjectiveIndicatorText: { color: "#065f46", fontSize: 14 },
 });
 

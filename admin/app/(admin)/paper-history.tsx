@@ -224,6 +224,13 @@ export default function PaperHistoryScreen() {
     }
   };
 
+  const getQuestionTypeColor = (questionType?: string) => {
+    if (questionType === "subjective") {
+      return { bg: "#fef3c7", border: "#fcd34d", text: "#92400e" };
+    }
+    return { bg: "#dbeafe", border: "#93c5fd", text: "#1e40af" };
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}>
@@ -327,6 +334,8 @@ export default function PaperHistoryScreen() {
         <View style={styles.papersGrid}>
           {papers.map((paper) => {
             const statusColors = getStatusColor(paper.status);
+            const questionTypeColors = getQuestionTypeColor(paper.questionType);
+            const isSubjective = paper.questionType === "subjective";
             return (
               <View key={paper._id} style={styles.paperCard}>
                 <View style={styles.paperHeader}>
@@ -334,8 +343,15 @@ export default function PaperHistoryScreen() {
                     <Text style={styles.paperTitle} numberOfLines={2}>{paper.title}</Text>
                     <Text style={styles.paperMeta}>{paper.subject}{paper.chapter ? ` • ${paper.chapter}` : ""}</Text>
                   </View>
-                  <View style={[styles.statusBadge, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
-                    <Text style={[styles.statusText, { color: statusColors.text }]}>{paper.status}</Text>
+                  <View style={styles.badgeRow}>
+                    <View style={[styles.statusBadge, { backgroundColor: questionTypeColors.bg, borderColor: questionTypeColors.border }]}>
+                      <Text style={[styles.statusText, { color: questionTypeColors.text }]}>
+                        {isSubjective ? "Subjective" : "MCQ"}
+                      </Text>
+                    </View>
+                    <View style={[styles.statusBadge, { backgroundColor: statusColors.bg, borderColor: statusColors.border }]}>
+                      <Text style={[styles.statusText, { color: statusColors.text }]}>{paper.status}</Text>
+                    </View>
                   </View>
                 </View>
 
@@ -363,9 +379,16 @@ export default function PaperHistoryScreen() {
                   <Pressable onPress={() => handleEdit(paper)} style={[styles.actionBtn, styles.editBtn]}>
                     <Text style={styles.actionBtnText}>Edit</Text>
                   </Pressable>
-                  <Pressable onPress={() => handleOpenAssignModal(paper)} style={[styles.actionBtn, styles.assignBtn]}>
-                    <Text style={styles.assignBtnText}>Assign Test</Text>
-                  </Pressable>
+                  {!isSubjective && (
+                    <Pressable onPress={() => handleOpenAssignModal(paper)} style={[styles.actionBtn, styles.assignBtn]}>
+                      <Text style={styles.assignBtnText}>Assign Test</Text>
+                    </Pressable>
+                  )}
+                  {isSubjective && (
+                    <View style={[styles.actionBtn, styles.disabledBtn]}>
+                      <Text style={styles.disabledBtnText}>Can't Assign</Text>
+                    </View>
+                  )}
                 </View>
                 
                 {/* Secondary Actions */}
@@ -587,7 +610,8 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 14, color: "#6b7280", textAlign: "center" },
   papersGrid: { gap: 16 },
   paperCard: { backgroundColor: "#fff", borderRadius: 12, padding: 16, borderWidth: 1, borderColor: "#e5e7eb", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
-  paperHeader: { flexDirection: "row", gap: 12, marginBottom: 8 },
+  paperHeader: { flexDirection: "row", gap: 12, marginBottom: 8, flexWrap: "wrap" },
+  badgeRow: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
   paperTitle: { fontSize: 16, fontWeight: "600", color: "#111827", marginBottom: 4 },
   paperMeta: { fontSize: 13, color: "#6b7280" },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
@@ -606,6 +630,8 @@ const styles = StyleSheet.create({
   actionBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
   assignBtn: { backgroundColor: "#2563eb" },
   assignBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  disabledBtn: { backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "#e5e7eb" },
+  disabledBtnText: { color: "#9ca3af", fontWeight: "500", fontSize: 12 },
   duplicateBtn: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#d1d5db" },
   duplicateBtnText: { color: "#374151", fontWeight: "500", fontSize: 12 },
   deleteBtn: { backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#fecaca" },

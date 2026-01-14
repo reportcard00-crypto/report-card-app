@@ -6,10 +6,12 @@ export type EditorOption = {
 };
 
 export type Difficulty = "easy" | "medium" | "hard";
+export type QuestionType = "objective" | "subjective";
 
 export type EditorQuestion = {
   id: string;
   text: string;
+  questionType: QuestionType; // objective (MCQ) or subjective (open-ended)
   options: EditorOption[];
   correctOptionId?: string | null;
   image?: string | null;
@@ -45,11 +47,13 @@ export type QuestionEditorState = {
   setTags: (questionId: string, tags: string[]) => void;
   addChapterForSubject: (subject: string, chapter: string) => void;
   setDescription: (questionId: string, description: string | null) => void;
+  setQuestionType: (questionId: string, questionType: QuestionType) => void;
   // Streaming support
   clearQuestions: () => void;
   addStreamedQuestion: (data: {
     dbId: string;
     question: string;
+    questionType?: QuestionType;
     options: string[];
     correctIndex?: number;
     image?: string | null;
@@ -92,25 +96,34 @@ const normalizeResult = (result: any): EditorQuestion[] => {
       return { id: makeId("opt"), text };
     });
     const image = toDataUrlIfNeeded(item?.image || item?.diagram || item?.img || null);
+    
+    // Determine question type - default to objective if has options, subjective if no options
+    const questionType: QuestionType = 
+      item?.questionType === "subjective" || (options.length === 0) ? "subjective" : "objective";
+    
     let correctOptionId: string | null = null;
-    const correctFromIndex =
-      typeof item?.correctIndex === "number"
-        ? item.correctIndex
-        : typeof item?.answerIndex === "number"
-        ? item.answerIndex
-        : typeof item?.correct === "number"
-        ? item.correct
-        : undefined;
-    if (typeof correctFromIndex === "number" && options[correctFromIndex]) {
-      correctOptionId = options[correctFromIndex].id;
-    } else if (typeof item?.correct === "string" || typeof item?.answer === "string") {
-      const correctText = (item?.correct ?? item?.answer) as string;
-      const found = options.find((o) => o.text.trim() === correctText.trim());
-      correctOptionId = found?.id ?? null;
+    // Only process correct option for objective questions
+    if (questionType === "objective") {
+      const correctFromIndex =
+        typeof item?.correctIndex === "number"
+          ? item.correctIndex
+          : typeof item?.answerIndex === "number"
+          ? item.answerIndex
+          : typeof item?.correct === "number"
+          ? item.correct
+          : undefined;
+      if (typeof correctFromIndex === "number" && options[correctFromIndex]) {
+        correctOptionId = options[correctFromIndex].id;
+      } else if (typeof item?.correct === "string" || typeof item?.answer === "string") {
+        const correctText = (item?.correct ?? item?.answer) as string;
+        const found = options.find((o) => o.text.trim() === correctText.trim());
+        correctOptionId = found?.id ?? null;
+      }
     }
     return {
       id: makeId(`q${idx + 1}`),
       text,
+      questionType,
       options,
       correctOptionId,
       image: image ?? null,
@@ -209,6 +222,10 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
     set((state) => ({
       questions: state.questions.map((q) => (q.id === questionId ? { ...q, description } : q)),
     })),
+  setQuestionType: (questionId, questionType) =>
+    set((state) => ({
+      questions: state.questions.map((q) => (q.id === questionId ? { ...q, questionType } : q)),
+    })),
   addChapterForSubject: (subject, chapter) =>
     set((state) => {
       const trimmed = chapter.trim();
@@ -233,8 +250,13 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
         text: opt,
       }));
       
+      // Determine question type - default to objective if has options, subjective if no options
+      const questionType: QuestionType = 
+        data.questionType === "subjective" || (options.length === 0) ? "subjective" : "objective";
+      
       let correctOptionId: string | null = null;
-      if (typeof data.correctIndex === "number" && options[data.correctIndex]) {
+      // Only process correct option for objective questions
+      if (questionType === "objective" && typeof data.correctIndex === "number" && options[data.correctIndex]) {
         correctOptionId = options[data.correctIndex].id;
       }
       
@@ -243,6 +265,7 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
       const newQuestion: EditorQuestion = {
         id: data.dbId || makeId(`q${state.questions.length + 1}`),
         text: data.question,
+        questionType,
         options,
         correctOptionId,
         image: image ?? null,

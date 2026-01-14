@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable } from "react-native";
 import { Image } from "expo-image";
-import { useQuestionEditorStore, SUBJECT_TO_CHAPTERS, type QuestionEditorState, type Difficulty } from "@/store/questionEditor";
+import { useQuestionEditorStore, SUBJECT_TO_CHAPTERS, type QuestionEditorState, type Difficulty, type QuestionType } from "@/store/questionEditor";
 import { router } from "expo-router";
 import { uploadPdfDirect, generateQuestionMetadata, saveQuestionsBatch } from "@/api/admin";
 
@@ -130,6 +130,7 @@ const QuestionEditor = () => {
     setTopics,
     setTags,
     setDescription,
+    setQuestionType,
   } = useQuestionEditorStore();
   const selectedSubject = useQuestionEditorStore((s: QuestionEditorState) => s.selectedSubject);
   const addChapterForSubject = useQuestionEditorStore((s: QuestionEditorState) => s.addChapterForSubject);
@@ -308,10 +309,49 @@ const QuestionEditor = () => {
         <Button title="Next" disabled={selectedIndex >= total - 1} onPress={() => selectIndex(selectedIndex + 1)} />
       </View>
 
-      <View style={{ gap: 4 }}>
+      <View style={{ gap: 8 }}>
         <Text style={{ color: "#555" }}>
           Subject: {selectedSubject ?? "— Select subject during upload —"}
         </Text>
+        {/* Question Type Indicator */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Text style={{ color: "#555" }}>Question Type:</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              onPress={() => setQuestionType(current.id, "objective")}
+              style={{
+                backgroundColor: current.questionType === "objective" ? "#4361ee" : "#e8e8e8",
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 16,
+              }}
+            >
+              <Text style={{ color: current.questionType === "objective" ? "#fff" : "#333", fontWeight: "500", fontSize: 13 }}>
+                📝 Objective (MCQ)
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setQuestionType(current.id, "subjective")}
+              style={{
+                backgroundColor: current.questionType === "subjective" ? "#10b981" : "#e8e8e8",
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 16,
+              }}
+            >
+              <Text style={{ color: current.questionType === "subjective" ? "#fff" : "#333", fontWeight: "500", fontSize: 13 }}>
+                ✍️ Subjective
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+        {current.questionType === "subjective" && (
+          <View style={{ backgroundColor: "#ecfdf5", padding: 10, borderRadius: 8, borderWidth: 1, borderColor: "#a7f3d0" }}>
+            <Text style={{ color: "#065f46", fontSize: 13 }}>
+              ℹ️ This is a subjective question (essay/short-answer). Options are not applicable.
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={{ gap: 8 }}>
@@ -480,73 +520,78 @@ const QuestionEditor = () => {
         />
       </View>
 
-      <View style={{ gap: 8 }}>
-        <Text style={{ fontWeight: "500" }}>Correct Option</Text>
-        {Platform.OS === "web" ? (
-          // @ts-ignore web-only select
-          <select
-            value={correctIndex >= 0 ? String(correctIndex) : ""}
-            onChange={(e: any) => {
-              const idx = Number(e?.target?.value);
-              const opt = current.options[idx];
-              setCorrectOption(current.id, opt ? opt.id : null);
-            }}
-            style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 8, minWidth: 160 }}
-          >
-            {/* @ts-ignore */}
-            <option value="" disabled>
-              Select correct option
-            </option>
-            {current.options.map((o, i) => (
-              // @ts-ignore web-only option
-              <option key={o.id} value={String(i)}>
-                {`Option ${i + 1}`}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {current.options.map((o, i) => {
-              const isSelected = current.correctOptionId === o.id;
-              return (
-                <Button
-                  key={o.id}
-                  title={`${isSelected ? "✓ " : ""}Option ${i + 1}`}
-                  onPress={() => setCorrectOption(current.id, o.id)}
-                />
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      <View style={{ gap: 8 }}>
-        <Text style={{ fontWeight: "500" }}>Options</Text>
-        <View style={{ gap: 8 }}>
-          {current.options.map((o, i) => (
-            <View key={o.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <Text style={{ width: 70 }}>{`Option ${i + 1}`}</Text>
-              <TextInput
-                value={o.text}
-                onChangeText={(t) => updateOptionText(current.id, o.id, t)}
-                placeholder={`Option ${i + 1} text`}
-                style={{
-                  flex: 1,
-                  borderWidth: 1,
-                  borderColor: "#ccc",
-                  borderRadius: 6,
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
+      {/* Only show options for objective (MCQ) questions */}
+      {current.questionType !== "subjective" && (
+        <>
+          <View style={{ gap: 8 }}>
+            <Text style={{ fontWeight: "500" }}>Correct Option</Text>
+            {Platform.OS === "web" ? (
+              // @ts-ignore web-only select
+              <select
+                value={correctIndex >= 0 ? String(correctIndex) : ""}
+                onChange={(e: any) => {
+                  const idx = Number(e?.target?.value);
+                  const opt = current.options[idx];
+                  setCorrectOption(current.id, opt ? opt.id : null);
                 }}
-              />
-              <Button title="Remove" onPress={() => removeOption(current.id, o.id)} />
+                style={{ borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 8, minWidth: 160 }}
+              >
+                {/* @ts-ignore */}
+                <option value="" disabled>
+                  Select correct option
+                </option>
+                {current.options.map((o, i) => (
+                  // @ts-ignore web-only option
+                  <option key={o.id} value={String(i)}>
+                    {`Option ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {current.options.map((o, i) => {
+                  const isSelected = current.correctOptionId === o.id;
+                  return (
+                    <Button
+                      key={o.id}
+                      title={`${isSelected ? "✓ " : ""}Option ${i + 1}`}
+                      onPress={() => setCorrectOption(current.id, o.id)}
+                    />
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={{ gap: 8 }}>
+            <Text style={{ fontWeight: "500" }}>Options</Text>
+            <View style={{ gap: 8 }}>
+              {current.options.map((o, i) => (
+                <View key={o.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={{ width: 70 }}>{`Option ${i + 1}`}</Text>
+                  <TextInput
+                    value={o.text}
+                    onChangeText={(t) => updateOptionText(current.id, o.id, t)}
+                    placeholder={`Option ${i + 1} text`}
+                    style={{
+                      flex: 1,
+                      borderWidth: 1,
+                      borderColor: "#ccc",
+                      borderRadius: 6,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                    }}
+                  />
+                  <Button title="Remove" onPress={() => removeOption(current.id, o.id)} />
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-        <View>
-          <Button title="Add Option" onPress={() => addOption(current.id)} />
-        </View>
-      </View>
+            <View>
+              <Button title="Add Option" onPress={() => addOption(current.id)} />
+            </View>
+          </View>
+        </>
+      )}
 
       <View style={{ gap: 8 }}>
         <Text style={{ fontWeight: "500" }}>Diagram (optional)</Text>
@@ -640,14 +685,16 @@ const QuestionEditor = () => {
                 const items = questions.map((q) => {
                   const optIndexMap = new Map<string, number>();
                   q.options.forEach((o, i) => optIndexMap.set(o.id, i));
+                  // Only calculate correct index for objective questions
                   const correctIndex =
-                    q.correctOptionId && optIndexMap.has(q.correctOptionId)
+                    q.questionType !== "subjective" && q.correctOptionId && optIndexMap.has(q.correctOptionId)
                       ? (optIndexMap.get(q.correctOptionId) as number)
                       : null;
                   return {
                     text: q.text,
-                    options: q.options.map((o) => o.text),
-                    correctIndex,
+                    questionType: q.questionType ?? "objective",
+                    options: q.questionType === "subjective" ? [] : q.options.map((o) => o.text),
+                    correctIndex: q.questionType === "subjective" ? null : correctIndex,
                     image: q.image ?? null,
                     chapter: q.chapter ?? null,
                     difficulty: (q.difficulty as any) ?? null,
