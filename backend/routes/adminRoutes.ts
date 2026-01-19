@@ -7,7 +7,9 @@ import {
   getUploadHistory, 
   getSessionQuestions, 
   getSessionStatus, 
-  getActiveSessions, 
+  getActiveSessions,
+  deleteUploadSession,
+  cleanupStuckSessions,
   generateQuestionMetadata, 
   saveQuestionsBatch, 
   generateQuestionPaper, 
@@ -37,6 +39,8 @@ adminRouter.get("/upload-history", isAuthenticated, isAdmin, getUploadHistory);
 adminRouter.get("/upload-history/:sessionId/questions", isAuthenticated, isAdmin, getSessionQuestions);
 adminRouter.get("/upload-history/:sessionId/status", isAuthenticated, isAdmin, getSessionStatus);
 adminRouter.get("/active-sessions", isAuthenticated, isAdmin, getActiveSessions);
+adminRouter.delete("/upload-history/:sessionId", isAuthenticated, isAdmin, deleteUploadSession);
+adminRouter.post("/upload-history/cleanup-stuck", isAuthenticated, isAdmin, cleanupStuckSessions);
 adminRouter.post("/questions/auto-metadata", isAuthenticated, isAdmin, generateQuestionMetadata);
 adminRouter.post("/questions/batch", isAuthenticated, isAdmin, saveQuestionsBatch);
 

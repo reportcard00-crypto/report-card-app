@@ -1104,6 +1104,86 @@ export const getActiveSessions = async (req: CustomRequest, res: Response) => {
   }
 };
 
+// Delete an upload session (and optionally its extracted questions)
+export const deleteUploadSession = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { sessionId } = req.params;
+    const { deleteQuestions = false } = req.query as { deleteQuestions?: string | boolean };
+    const shouldDeleteQuestions = deleteQuestions === "true" || deleteQuestions === true;
+
+    const session = await UploadSession.findOne({
+      _id: sessionId,
+      createdBy: currentUser._id,
+    });
+
+    if (!session) {
+      res.status(404).json({ success: false, message: "Upload session not found" });
+      return;
+    }
+
+    // Optionally delete associated questions
+    let deletedQuestionsCount = 0;
+    if (shouldDeleteQuestions && session.questionIds && session.questionIds.length > 0) {
+      const deleteResult = await Question.deleteMany({ _id: { $in: session.questionIds } });
+      deletedQuestionsCount = deleteResult.deletedCount || 0;
+    }
+
+    // Delete the session
+    await UploadSession.deleteOne({ _id: sessionId });
+
+    res.status(200).json({
+      success: true,
+      message: `Upload session deleted${shouldDeleteQuestions ? ` along with ${deletedQuestionsCount} questions` : ""}`,
+      deletedQuestionsCount,
+    });
+  } catch (error) {
+    console.error("Error deleting upload session:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Mark stuck processing sessions as failed (sessions older than 30 minutes)
+export const cleanupStuckSessions = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    
+    const result = await UploadSession.updateMany(
+      {
+        createdBy: currentUser._id,
+        status: "processing",
+        createdAt: { $lt: thirtyMinutesAgo },
+      },
+      {
+        $set: {
+          status: "failed",
+          errorMessage: "Session timed out - processing took too long or connection was lost",
+        },
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `${result.modifiedCount} stuck session(s) marked as failed`,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error cleaning up stuck sessions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 export const saveQuestionsBatch = async (req: CustomRequest, res: Response) => {
   try {
     const currentUser = req.user;
