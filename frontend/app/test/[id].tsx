@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { startTestForStudent, submitTest, type TestQuestion, type StartTestResponse } from "@/api/client";
+import FormattedText from "@/components/FormattedText";
 
 export default function TestScreen() {
   const router = useRouter();
@@ -257,7 +258,13 @@ export default function TestScreen() {
 
       {/* Question */}
       <ScrollView style={styles.questionContainer} contentContainerStyle={styles.questionContent}>
-        <Text style={styles.questionText}>{currentQuestion.text}</Text>
+        <View style={styles.questionTextContainer}>
+          <FormattedText 
+            content={currentQuestion.text} 
+            fontSize={18} 
+            color="#111827"
+          />
+        </View>
         
         {currentQuestion.image && (
           <Image 
@@ -289,12 +296,13 @@ export default function TestScreen() {
                   {String.fromCharCode(65 + index)}
                 </Text>
               </View>
-              <Text style={[
-                styles.optionText,
-                selectedOption === index && styles.optionTextSelected
-              ]}>
-                {option}
-              </Text>
+              <View style={styles.optionTextContainer}>
+                <FormattedText 
+                  content={option} 
+                  fontSize={16} 
+                  color={selectedOption === index ? "#1e40af" : "#374151"}
+                />
+              </View>
             </Pressable>
           ))}
         </View>
@@ -472,6 +480,9 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 24,
   },
+  questionTextContainer: {
+    marginBottom: 20,
+  },
   questionText: {
     fontSize: 18,
     fontWeight: "500",
@@ -521,6 +532,9 @@ const styles = StyleSheet.create({
   },
   optionLetterSelected: {
     color: "#fff",
+  },
+  optionTextContainer: {
+    flex: 1,
   },
   optionText: {
     flex: 1,

@@ -123,7 +123,8 @@ export const generateQuestionMetadata = async (req: CustomRequest, res: Response
       "Given a question (and optionally its multiple-choice options), infer rich, useful metadata with care. " +
       "When helpful, use web research to identify canonical chapter/topic names, exam contexts, or commonly associated tags. " +
       "Return ONLY strict JSON. Do not include any extra text. " +
-      "CRITICAL: The `description` field must be an exam-relevance summary (not a paraphrase of the question).";
+      "CRITICAL: The `description` field must be an exam-relevance summary (not a paraphrase of the question). " +
+      "FORMAT: Use proper markdown formatting in the description field - use **bold** for emphasis, bullet points (- or •), and LaTeX for math expressions ($inline$ or $$block$$).";
 
     const schemaExample = {
       chapter: "string | null",
@@ -143,11 +144,17 @@ export const generateQuestionMetadata = async (req: CustomRequest, res: Response
       "- Tags should be helpful for search and organization; include exam tags (e.g., JEE Mains/NEET/Boards) only when meaningful.\n" +
       "- If options are provided, set correctIndex to the index (0-based) of the most plausible correct option; otherwise null.\n" +
       "- DESCRIPTION REQUIREMENTS (very important):\n" +
-      "  • Write a compact exam-relevance summary, not a restatement of the question.\n" +
-      "  • Prefer a 3–6 line bullet-style paragraph covering: Past appearances (years/exams if known or 'similar to'),\n" +
-      "    importance/weightage within the subject/chapter, skills/concepts tested, typical marks/time, and predicted likelihood (High/Medium/Low) next cycle.\n" +
-      "  • Where helpful, include 1–2 short reputable references (e.g., NCERT chapter name/section, standard book chapter, or a credible syllabus link). Keep URLs short.\n" +
-      "  • Example tone: \"JEE Mains trend: frequently seen in 2019(Shift 1), 2022(Shift 2, similar). Weightage ~2–3% in Mechanics; tests Newton's laws + system acceleration. Likelihood: High. Refs: NCERT XI Physics Ch.5; [NTA Archive].\"\n" +
+      "  • Write a compact exam-relevance summary using proper **markdown formatting**.\n" +
+      "  • Use bullet points (- item) for lists, **bold** for key terms, and *italics* for emphasis.\n" +
+      "  • For any mathematical expressions, use LaTeX: $x^2$ for inline, $$\\frac{a}{b}$$ for block.\n" +
+      "  • Cover: Past appearances (years/exams), importance/weightage, concepts tested, marks/time, likelihood.\n" +
+      "  • Example format:\n" +
+      "    **Exam Trend:** JEE Mains 2019 (Shift 1), 2022 (Shift 2)\n" +
+      "    - **Weightage:** ~2–3% in Mechanics\n" +
+      "    - **Concepts:** Newton's laws, system acceleration\n" +
+      "    - **Key Formula:** $F = ma$, $a_{system} = \\frac{F_{net}}{m_{total}}$\n" +
+      "    - **Likelihood:** *High* for next cycle\n" +
+      "    - **Refs:** NCERT XI Physics Ch.5\n" +
       "- Respond with ONLY a JSON object conforming to this schema:\n" +
       JSON.stringify(schemaExample, null, 2) +
       "\n\nQuestion:\n" +
@@ -319,13 +326,51 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
       const base64Image = pngBuffer.toString("base64");
       const dataUrl = `data:image/png;base64,${base64Image}`;
 
+      // Extract text layer from PDF (accurate, verbatim text)
+      const textContent = await page.getTextContent();
+      const textItems = textContent.items as Array<{ str: string; transform?: number[] }>;
+
+      // Sort text items by vertical position (top to bottom) then horizontal (left to right)
+      const sortedItems = textItems
+        .filter((item) => item.str && item.str.trim())
+        .map((item) => ({
+          str: item.str,
+          x: item.transform?.[4] ?? 0,
+          y: item.transform?.[5] ?? 0,
+        }))
+        .sort((a, b) => {
+          // Sort by Y (descending, since PDF Y is bottom-up) then by X
+          const yDiff = b.y - a.y;
+          if (Math.abs(yDiff) > 5) return yDiff; // Different lines
+          return a.x - b.x; // Same line, sort left to right
+        });
+
+      // Reconstruct text with line breaks
+      let extractedText = "";
+      let lastY: number | null = null;
+      for (const item of sortedItems) {
+        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+          extractedText += "\n";
+        } else if (extractedText && !extractedText.endsWith(" ") && !extractedText.endsWith("\n")) {
+          extractedText += " ";
+        }
+        extractedText += item.str;
+        lastY = item.y;
+      }
+
+      const hasSelectableText = extractedText.trim().length > 50; // Threshold to detect if PDF has real text
+
       // Build prompt for OpenRouter (multimodal)
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
-        "You are an expert at parsing printed, scanned exam pages. Extract ALL questions - both multiple-choice (objective) and open-ended/written (subjective) questions. " +
+        "You are an expert at parsing printed exam pages. You will receive: " +
+        "(1) The EXTRACTED TEXT from the PDF's text layer - this is the EXACT, VERBATIM text as encoded in the PDF. " +
+        "(2) An IMAGE of the page - use this ONLY for understanding diagrams, figures, and their labels. " +
+        "CRITICAL: For question text and options, use the EXTRACTED TEXT verbatim. Do NOT paraphrase or modify any text. " +
+        "The image is provided only to help you understand diagrams and match them to the correct questions. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string, the stem), `questionType` ('objective' for MCQ with options, 'subjective' for open-ended/essay/written questions), " +
-        "`options` (array of strings in order - ONLY for objective questions, empty array for subjective), " +
+        "`question` (string - copy EXACTLY from extracted text), `questionType` ('objective' or 'subjective'), " +
+        "`options` (array of strings - copy EXACTLY from extracted text, ONLY for objective questions, empty array for subjective), " +
         "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
         "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
         "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
@@ -335,8 +380,16 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
         "The box should tightly enclose only the figure/diagram related to that question (exclude text as much as possible). " +
         "Focus only on printed/typed content; ignore handwritten notes.";
 
+      const extractedTextBlock = hasSelectableText
+        ? `\n\n--- EXTRACTED TEXT FROM PDF (use this VERBATIM for question text and options) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
+        : "\n\n--- No selectable text found in PDF, using OCR from image ---\n";
+
       const firstPageInstruction =
-        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page image and respond with a JSON array using this exact schema: " +
+        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page. " +
+        "IMPORTANT: Use the EXTRACTED TEXT below for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
+        "Use the image ONLY for diagram detection, figure labels, and bounding boxes. " +
+        extractedTextBlock +
+        "Respond with a JSON array using this exact schema: " +
         "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
         "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
         "For subjective questions (essay, short-answer, numerical without options), set questionType to 'subjective' and options to empty array []. " +
@@ -346,7 +399,8 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
 
       const continuationInstruction =
         "The next page may contain the continuation of a question that started on the previous page. " +
-        "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, and (3) the current page image. " +
+        "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, (3) the current page image, and (4) the EXTRACTED TEXT from the current page. " +
+        "IMPORTANT: Use the EXTRACTED TEXT for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
         "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
@@ -376,7 +430,8 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
                     type: "text",
                     text:
                       "Previous page extracted JSON (may be incomplete for split questions):\n" +
-                      JSON.stringify(previousPageExtraction || [], null, 2),
+                      JSON.stringify(previousPageExtraction || [], null, 2) +
+                      extractedTextBlock,
                   },
                   // Current page image
                   { type: "image_url", image_url: { url: dataUrl } },
@@ -661,13 +716,51 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
       const base64Image = pngBuffer.toString("base64");
       const dataUrl = `data:image/png;base64,${base64Image}`;
 
+      // Extract text layer from PDF (accurate, verbatim text)
+      const textContent = await page.getTextContent();
+      const textItems = textContent.items as Array<{ str: string; transform?: number[] }>;
+
+      // Sort text items by vertical position (top to bottom) then horizontal (left to right)
+      const sortedItems = textItems
+        .filter((item) => item.str && item.str.trim())
+        .map((item) => ({
+          str: item.str,
+          x: item.transform?.[4] ?? 0,
+          y: item.transform?.[5] ?? 0,
+        }))
+        .sort((a, b) => {
+          // Sort by Y (descending, since PDF Y is bottom-up) then by X
+          const yDiff = b.y - a.y;
+          if (Math.abs(yDiff) > 5) return yDiff; // Different lines
+          return a.x - b.x; // Same line, sort left to right
+        });
+
+      // Reconstruct text with line breaks
+      let extractedText = "";
+      let lastY: number | null = null;
+      for (const item of sortedItems) {
+        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+          extractedText += "\n";
+        } else if (extractedText && !extractedText.endsWith(" ") && !extractedText.endsWith("\n")) {
+          extractedText += " ";
+        }
+        extractedText += item.str;
+        lastY = item.y;
+      }
+
+      const hasSelectableText = extractedText.trim().length > 50; // Threshold to detect if PDF has real text
+
       // Build prompt for OpenRouter (multimodal)
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
-        "You are an expert at parsing printed, scanned exam pages. Extract ALL questions - both multiple-choice (objective) and open-ended/written (subjective) questions. " +
+        "You are an expert at parsing printed exam pages. You will receive: " +
+        "(1) The EXTRACTED TEXT from the PDF's text layer - this is the EXACT, VERBATIM text as encoded in the PDF. " +
+        "(2) An IMAGE of the page - use this ONLY for understanding diagrams, figures, and their labels. " +
+        "CRITICAL: For question text and options, use the EXTRACTED TEXT verbatim. Do NOT paraphrase or modify any text. " +
+        "The image is provided only to help you understand diagrams and match them to the correct questions. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string, the stem), `questionType` ('objective' for MCQ with options, 'subjective' for open-ended/essay/written questions), " +
-        "`options` (array of strings in order - ONLY for objective questions, empty array for subjective), " +
+        "`question` (string - copy EXACTLY from extracted text), `questionType` ('objective' or 'subjective'), " +
+        "`options` (array of strings - copy EXACTLY from extracted text, ONLY for objective questions, empty array for subjective), " +
         "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
         "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
         "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
@@ -677,8 +770,16 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
         "The box should tightly enclose only the figure/diagram related to that question (exclude text as much as possible). " +
         "Focus only on printed/typed content; ignore handwritten notes.";
 
+      const extractedTextBlock = hasSelectableText
+        ? `\n\n--- EXTRACTED TEXT FROM PDF (use this VERBATIM for question text and options) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
+        : "\n\n--- No selectable text found in PDF, using OCR from image ---\n";
+
       const firstPageInstruction =
-        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page image and respond with a JSON array using this exact schema: " +
+        "Extract ALL questions (both objective MCQ and subjective open-ended) from this page. " +
+        "IMPORTANT: Use the EXTRACTED TEXT below for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
+        "Use the image ONLY for diagram detection, figure labels, and bounding boxes. " +
+        extractedTextBlock +
+        "Respond with a JSON array using this exact schema: " +
         "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
         "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
         "For subjective questions (essay, short-answer, numerical without options), set questionType to 'subjective' and options to empty array []. " +
@@ -688,7 +789,8 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
 
       const continuationInstruction =
         "The next page may contain the continuation of a question that started on the previous page. " +
-        "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, and (3) the current page image. " +
+        "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, (3) the current page image, and (4) the EXTRACTED TEXT from the current page. " +
+        "IMPORTANT: Use the EXTRACTED TEXT for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
         "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
@@ -716,7 +818,8 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
                     type: "text",
                     text:
                       "Previous page extracted JSON (may be incomplete for split questions):\n" +
-                      JSON.stringify(previousPageExtraction || [], null, 2),
+                      JSON.stringify(previousPageExtraction || [], null, 2) +
+                      extractedTextBlock,
                   },
                   { type: "image_url", image_url: { url: dataUrl } },
                 ],
@@ -1180,6 +1283,60 @@ export const cleanupStuckSessions = async (req: CustomRequest, res: Response) =>
     });
   } catch (error) {
     console.error("Error cleaning up stuck sessions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+// Delete all processing sessions (and optionally their extracted questions)
+export const deleteAllProcessingSessions = async (req: CustomRequest, res: Response) => {
+  try {
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    const { deleteQuestions = false } = req.query as { deleteQuestions?: string | boolean };
+    const shouldDeleteQuestions = deleteQuestions === "true" || deleteQuestions === true;
+
+    // Find all processing sessions for this user
+    const processingSessions = await UploadSession.find({
+      createdBy: currentUser._id,
+      status: "processing",
+    });
+
+    if (processingSessions.length === 0) {
+      res.status(200).json({
+        success: true,
+        message: "No processing sessions found",
+        deletedSessions: 0,
+        deletedQuestionsCount: 0,
+      });
+      return;
+    }
+
+    // Collect all question IDs if we need to delete them
+    let deletedQuestionsCount = 0;
+    if (shouldDeleteQuestions) {
+      const allQuestionIds = processingSessions.flatMap(s => s.questionIds || []);
+      if (allQuestionIds.length > 0) {
+        const deleteResult = await Question.deleteMany({ _id: { $in: allQuestionIds } });
+        deletedQuestionsCount = deleteResult.deletedCount || 0;
+      }
+    }
+
+    // Delete all processing sessions
+    const sessionIds = processingSessions.map(s => s._id);
+    await UploadSession.deleteMany({ _id: { $in: sessionIds } });
+
+    res.status(200).json({
+      success: true,
+      message: `Deleted ${processingSessions.length} processing session(s)${shouldDeleteQuestions ? ` along with ${deletedQuestionsCount} questions` : ""}`,
+      deletedSessions: processingSessions.length,
+      deletedQuestionsCount,
+    });
+  } catch (error) {
+    console.error("Error deleting all processing sessions:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

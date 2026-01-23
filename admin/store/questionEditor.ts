@@ -279,8 +279,8 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
       
       return {
         questions: [...state.questions, newQuestion],
-        // Auto-select the newly added question
-        selectedIndex: state.questions.length,
+        // Keep the current selectedIndex - don't auto-select newly streamed questions
+        // This prevents the index from resetting when user is editing a different question
       };
     }),
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),

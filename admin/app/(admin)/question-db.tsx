@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable } from "react-native";
-import { uploadPdfDirect, processQuestionPdfStream, getUploadHistory, getSessionQuestions, getActiveSessions, getSessionStatus, type UploadSession, type StreamEvent } from "@/api/admin";
+import { uploadPdfDirect, processQuestionPdfStream, getUploadHistory, getSessionQuestions, getActiveSessions, getSessionStatus, deleteAllProcessingSessions, type UploadSession, type StreamEvent } from "@/api/admin";
 import { useQuestionEditorStore, type QuestionEditorState, SUBJECTS } from "@/store/questionEditor";
 import { router } from "expo-router";
 
@@ -53,6 +53,7 @@ const QuestionDB = () => {
   const [uploadHistory, setUploadHistory] = useState<UploadSession[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [resumedSession, setResumedSession] = useState<string | null>(null);
+  const [deletingProcessing, setDeletingProcessing] = useState(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Store access
@@ -385,6 +386,48 @@ const QuestionDB = () => {
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  // Count processing sessions
+  const processingCount = useMemo(() => {
+    return uploadHistory.filter(s => s.status === "processing").length;
+  }, [uploadHistory]);
+
+  // Delete all processing sessions
+  const handleDeleteAllProcessing = async () => {
+    if (processingCount === 0) return;
+    
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ${processingCount} processing session(s)?\n\nThis will also delete any questions extracted so far from these sessions.`
+    );
+    
+    if (!confirmed) return;
+    
+    setDeletingProcessing(true);
+    try {
+      const result = await deleteAllProcessingSessions({ deleteQuestions: true });
+      if (result.success) {
+        // Clear local state if we're currently in a processing session
+        if (isStreaming) {
+          setIsStreaming(false);
+          clearActiveSession();
+          setResumedSession(null);
+          setStreamStatus(null);
+          clearQuestions();
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+        }
+        // Refresh history
+        await fetchHistory();
+      }
+    } catch (e) {
+      console.error("Failed to delete processing sessions:", e);
+      setError("Failed to delete processing sessions");
+    } finally {
+      setDeletingProcessing(false);
+    }
   };
 
   return (
@@ -834,9 +877,28 @@ const QuestionDB = () => {
           borderLeftColor: "#e2e8f0",
           padding: 16,
         }}>
-          <Text style={{ fontSize: 18, fontWeight: "600", marginBottom: 16, color: "#1e293b" }}>
-            Upload History
-          </Text>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: "600", color: "#1e293b" }}>
+              Upload History
+            </Text>
+            {processingCount > 0 && (
+              <Pressable
+                onPress={handleDeleteAllProcessing}
+                disabled={deletingProcessing}
+                style={{
+                  backgroundColor: deletingProcessing ? "#fca5a5" : "#ef4444",
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 6,
+                  opacity: deletingProcessing ? 0.7 : 1,
+                }}
+              >
+                <Text style={{ color: "#fff", fontSize: 12, fontWeight: "500" }}>
+                  {deletingProcessing ? "Deleting..." : `Delete All Processing (${processingCount})`}
+                </Text>
+              </Pressable>
+            )}
+          </View>
           
           {loadingHistory ? (
             <View style={{ alignItems: "center", paddingTop: 32 }}>

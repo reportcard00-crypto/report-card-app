@@ -132,6 +132,18 @@ export async function getActiveSessions() {
   };
 }
 
+// Delete all processing sessions
+export async function deleteAllProcessingSessions(options?: { deleteQuestions?: boolean }) {
+  const params = options?.deleteQuestions ? { deleteQuestions: "true" } : {};
+  const resp = await apiClient.delete(`/api/admin/upload-history/processing/all`, { params });
+  return resp.data as {
+    success: boolean;
+    message: string;
+    deletedSessions: number;
+    deletedQuestionsCount: number;
+  };
+}
+
 // Question type for distinguishing objective (MCQ) from subjective (open-ended)
 export type QuestionType = "objective" | "subjective";
 

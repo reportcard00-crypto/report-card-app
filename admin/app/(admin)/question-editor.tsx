@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from "react";
-import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable } from "react-native";
+import { View, Text, TextInput, Button, Platform, ScrollView, ActivityIndicator, Pressable, StyleSheet } from "react-native";
 import { Image } from "expo-image";
 import { useQuestionEditorStore, SUBJECT_TO_CHAPTERS, type QuestionEditorState, type Difficulty, type QuestionType } from "@/store/questionEditor";
 import { router } from "expo-router";
 import { uploadPdfDirect, generateQuestionMetadata, saveQuestionsBatch } from "@/api/admin";
+import MathMarkdown from "@/components/MathMarkdown";
 
 type ChipInputProps = {
   values: string[];
@@ -144,6 +145,9 @@ const QuestionEditor = () => {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
+  const [showRawEditor, setShowRawEditor] = useState(false);
+  const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
+  const [editingDescription, setEditingDescription] = useState(false);
 
   const fileToDataUrl = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -355,21 +359,62 @@ const QuestionEditor = () => {
       </View>
 
       <View style={{ gap: 8 }}>
-        <Text style={{ fontWeight: "500" }}>Question</Text>
-        <TextInput
-          value={current.text}
-          onChangeText={(t) => updateQuestionText(current.id, t)}
-          placeholder="Enter question text"
-          multiline
-          style={{
-            borderWidth: 1,
-            borderColor: "#ccc",
-            borderRadius: 6,
-            paddingHorizontal: 10,
-            paddingVertical: 8,
-            minHeight: 80,
-          }}
-        />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ fontWeight: "500" }}>Question</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              onPress={() => setShowRawEditor((v) => !v)}
+              style={{
+                backgroundColor: showRawEditor ? "#4361ee" : "#e8e8e8",
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: showRawEditor ? "#fff" : "#333", fontSize: 12, fontWeight: "500" }}>
+                {showRawEditor ? "📝 Editing" : "👁 Preview"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+        {showRawEditor ? (
+          <TextInput
+            value={current.text}
+            onChangeText={(t) => updateQuestionText(current.id, t)}
+            placeholder="Enter question text (supports LaTeX: $x^2$, $$\frac{a}{b}$$)"
+            multiline
+            style={{
+              borderWidth: 1,
+              borderColor: "#ccc",
+              borderRadius: 6,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
+              minHeight: 80,
+              fontFamily: Platform.OS === "web" ? "monospace" : undefined,
+            }}
+          />
+        ) : (
+          <Pressable
+            onPress={() => setShowRawEditor(true)}
+            style={{
+              borderWidth: 1,
+              borderColor: "#e5e7eb",
+              borderRadius: 8,
+              padding: 12,
+              minHeight: 80,
+              backgroundColor: "#fafafa",
+            }}
+          >
+            {current.text ? (
+              <MathMarkdown content={current.text} fontSize={15} />
+            ) : (
+              <Text style={{ color: "#9ca3af", fontStyle: "italic" }}>Click to add question text...</Text>
+            )}
+          </Pressable>
+        )}
+        <Text style={{ color: "#6b7280", fontSize: 11 }}>
+          {"💡 Tip: Use LaTeX for math — inline: $x^2 + y^2$ or block: $$\\frac{a}{b}$$"}
+        </Text>
       </View>
 
       <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
@@ -503,21 +548,59 @@ const QuestionEditor = () => {
 
       {/* Description */}
       <View style={{ gap: 8 }}>
-        <Text style={{ fontWeight: "500" }}>Description</Text>
-        <TextInput
-          value={current.description ?? ""}
-          onChangeText={(t) => setDescription(current.id, t || null)}
-          placeholder="e.g., Asked in 2022 JEE Mains"
-          multiline
-          style={{
-            borderWidth: 1,
-            borderColor: "#ccc",
-            borderRadius: 6,
-            paddingHorizontal: 10,
-            paddingVertical: 8,
-            minHeight: 48,
-          }}
-        />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ fontWeight: "500" }}>Description / Solution Notes</Text>
+          <Pressable
+            onPress={() => setEditingDescription((v) => !v)}
+            style={{
+              backgroundColor: editingDescription ? "#4361ee" : "#e8e8e8",
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+              borderRadius: 12,
+            }}
+          >
+            <Text style={{ color: editingDescription ? "#fff" : "#333", fontSize: 12, fontWeight: "500" }}>
+              {editingDescription ? "📝 Editing" : "👁 Preview"}
+            </Text>
+          </Pressable>
+        </View>
+        {editingDescription ? (
+          <TextInput
+            value={current.description ?? ""}
+            onChangeText={(t) => setDescription(current.id, t || null)}
+            placeholder="Add description, solution notes, exam history... (supports markdown)"
+            multiline
+            style={{
+              borderWidth: 1,
+              borderColor: "#ccc",
+              borderRadius: 6,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
+              minHeight: 100,
+              fontFamily: Platform.OS === "web" ? "monospace" : undefined,
+            }}
+          />
+        ) : (
+          <Pressable
+            onPress={() => setEditingDescription(true)}
+            style={{
+              borderWidth: 1,
+              borderColor: "#e5e7eb",
+              borderRadius: 8,
+              padding: 12,
+              minHeight: 60,
+              backgroundColor: "#fafafa",
+            }}
+          >
+            {current.description ? (
+              <MathMarkdown content={current.description} fontSize={14} />
+            ) : (
+              <Text style={{ color: "#9ca3af", fontStyle: "italic" }}>
+                Click to add description, exam history, solution notes...
+              </Text>
+            )}
+          </Pressable>
+        )}
       </View>
 
       {/* Only show options for objective (MCQ) questions */}
@@ -565,29 +648,106 @@ const QuestionEditor = () => {
 
           <View style={{ gap: 8 }}>
             <Text style={{ fontWeight: "500" }}>Options</Text>
-            <View style={{ gap: 8 }}>
-              {current.options.map((o, i) => (
-                <View key={o.id} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <Text style={{ width: 70 }}>{`Option ${i + 1}`}</Text>
-                  <TextInput
-                    value={o.text}
-                    onChangeText={(t) => updateOptionText(current.id, o.id, t)}
-                    placeholder={`Option ${i + 1} text`}
-                    style={{
-                      flex: 1,
+            <View style={{ gap: 10 }}>
+              {current.options.map((o, i) => {
+                const isEditing = editingOptionId === o.id;
+                const isCorrect = current.correctOptionId === o.id;
+                return (
+                  <View 
+                    key={o.id} 
+                    style={{ 
+                      flexDirection: "row", 
+                      alignItems: "flex-start", 
+                      gap: 8,
+                      padding: 8,
+                      backgroundColor: isCorrect ? "#ecfdf5" : "#f9fafb",
+                      borderRadius: 8,
                       borderWidth: 1,
-                      borderColor: "#ccc",
-                      borderRadius: 6,
-                      paddingHorizontal: 10,
-                      paddingVertical: 8,
+                      borderColor: isCorrect ? "#86efac" : "#e5e7eb",
                     }}
-                  />
-                  <Button title="Remove" onPress={() => removeOption(current.id, o.id)} />
-                </View>
-              ))}
+                  >
+                    <View style={{ 
+                      width: 28, 
+                      height: 28, 
+                      borderRadius: 14, 
+                      backgroundColor: isCorrect ? "#22c55e" : "#d1d5db",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginTop: 4,
+                    }}>
+                      <Text style={{ color: "#fff", fontWeight: "600", fontSize: 13 }}>
+                        {String.fromCharCode(65 + i)}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      {isEditing ? (
+                        <TextInput
+                          value={o.text}
+                          onChangeText={(t) => updateOptionText(current.id, o.id, t)}
+                          placeholder={`Option ${String.fromCharCode(65 + i)} (supports markdown)`}
+                          multiline
+                          autoFocus
+                          onBlur={() => setEditingOptionId(null)}
+                          style={{
+                            borderWidth: 1,
+                            borderColor: "#3b82f6",
+                            borderRadius: 6,
+                            paddingHorizontal: 10,
+                            paddingVertical: 8,
+                            minHeight: 40,
+                            backgroundColor: "#fff",
+                            fontFamily: Platform.OS === "web" ? "monospace" : undefined,
+                            fontSize: 14,
+                          }}
+                        />
+                      ) : (
+                        <Pressable
+                          onPress={() => setEditingOptionId(o.id)}
+                          style={{
+                            minHeight: 32,
+                            justifyContent: "center",
+                          }}
+                        >
+                          {o.text ? (
+                            <MathMarkdown content={o.text} fontSize={14} />
+                          ) : (
+                            <Text style={{ color: "#9ca3af", fontStyle: "italic", fontSize: 14 }}>
+                              Click to add option text...
+                            </Text>
+                          )}
+                        </Pressable>
+                      )}
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                      <Pressable
+                        onPress={() => setEditingOptionId(isEditing ? null : o.id)}
+                        style={{
+                          padding: 6,
+                          borderRadius: 6,
+                          backgroundColor: isEditing ? "#3b82f6" : "#e5e7eb",
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, color: isEditing ? "#fff" : "#374151" }}>
+                          {isEditing ? "✓" : "✏️"}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => removeOption(current.id, o.id)}
+                        style={{
+                          padding: 6,
+                          borderRadius: 6,
+                          backgroundColor: "#fee2e2",
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, color: "#dc2626" }}>🗑</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
             <View>
-              <Button title="Add Option" onPress={() => addOption(current.id)} />
+              <Button title="+ Add Option" onPress={() => addOption(current.id)} />
             </View>
           </View>
         </>

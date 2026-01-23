@@ -10,6 +10,7 @@ import {
   getActiveSessions,
   deleteUploadSession,
   cleanupStuckSessions,
+  deleteAllProcessingSessions,
   generateQuestionMetadata, 
   saveQuestionsBatch, 
   generateQuestionPaper, 
@@ -41,6 +42,7 @@ adminRouter.get("/upload-history/:sessionId/status", isAuthenticated, isAdmin, g
 adminRouter.get("/active-sessions", isAuthenticated, isAdmin, getActiveSessions);
 adminRouter.delete("/upload-history/:sessionId", isAuthenticated, isAdmin, deleteUploadSession);
 adminRouter.post("/upload-history/cleanup-stuck", isAuthenticated, isAdmin, cleanupStuckSessions);
+adminRouter.delete("/upload-history/processing/all", isAuthenticated, isAdmin, deleteAllProcessingSessions);
 adminRouter.post("/questions/auto-metadata", isAuthenticated, isAdmin, generateQuestionMetadata);
 adminRouter.post("/questions/batch", isAuthenticated, isAdmin, saveQuestionsBatch);
 

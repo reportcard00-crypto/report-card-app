@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { getTestResult, type TestResultData } from "@/api/client";
+import FormattedText from "@/components/FormattedText";
 
 export default function TestResultScreen() {
   const router = useRouter();
@@ -188,7 +189,9 @@ export default function TestResultScreen() {
                   <Text style={styles.answerNumber}>Question {idx + 1}</Text>
                 </View>
 
-                <Text style={styles.answerQuestion}>{q.text}</Text>
+                <View style={styles.answerQuestionContainer}>
+                  <FormattedText content={q.text} fontSize={15} color="#111827" />
+                </View>
 
                 <View style={styles.answerOptions}>
                   {q.options.map((option, optIdx) => {
@@ -211,13 +214,13 @@ export default function TestResultScreen() {
                         ]}>
                           {String.fromCharCode(65 + optIdx)}
                         </Text>
-                        <Text style={[
-                          styles.answerOptionText,
-                          isCorrectOption && styles.answerOptionTextCorrect,
-                          isSelectedOption && !isCorrectOption && styles.answerOptionTextWrong
-                        ]}>
-                          {option}
-                        </Text>
+                        <View style={styles.answerOptionTextContainer}>
+                          <FormattedText 
+                            content={option} 
+                            fontSize={14} 
+                            color={isCorrectOption ? "#065f46" : isSelectedOption ? "#991b1b" : "#374151"}
+                          />
+                        </View>
                         {isCorrectOption && (
                           <Text style={styles.correctLabel}>✓ Correct</Text>
                         )}
@@ -470,6 +473,9 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#374151",
   },
+  answerQuestionContainer: {
+    marginBottom: 12,
+  },
   answerQuestion: {
     fontSize: 15,
     color: "#111827",
@@ -507,6 +513,9 @@ const styles = StyleSheet.create({
   },
   answerOptionLetterWrong: {
     color: "#dc2626",
+  },
+  answerOptionTextContainer: {
+    flex: 1,
   },
   answerOptionText: {
     flex: 1,
