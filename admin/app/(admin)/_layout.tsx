@@ -54,8 +54,14 @@ export default function AdminLayout() {
       <Drawer.Screen 
         name="question-db" 
         options={{ 
-          title: "Question DB",
+          title: "Upload Questions",
           drawerItemStyle: isAdmin ? {} : { display: "none" }
+        }} 
+      />
+      <Drawer.Screen 
+        name="browse-questions" 
+        options={{ 
+          title: "Browse Questions",
         }} 
       />
       

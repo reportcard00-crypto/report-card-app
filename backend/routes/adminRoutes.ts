@@ -26,6 +26,14 @@ import {
   updateQuestionInPaper,
   deleteQuestionFromPaper,
   addQuestionToPaper,
+  // Question Database Browsing
+  browseQuestions,
+  getQuestion,
+  updateQuestion,
+  deleteQuestion,
+  searchSimilarQuestions,
+  getQuestionStats,
+  getFilterOptions,
 } from "../controllers/adminControllers";
 import { isAuthenticated, isAdmin, isAdminOrTeacher } from "../middlewares/auth";
 
@@ -62,6 +70,15 @@ adminRouter.post("/papers/:paperId/duplicate", isAuthenticated, isAdminOrTeacher
 adminRouter.post("/papers/:paperId/questions", isAuthenticated, isAdminOrTeacher, addQuestionToPaper);
 adminRouter.put("/papers/:paperId/questions/:questionId", isAuthenticated, isAdminOrTeacher, updateQuestionInPaper);
 adminRouter.delete("/papers/:paperId/questions/:questionId", isAuthenticated, isAdminOrTeacher, deleteQuestionFromPaper);
+
+// Question Database Browsing routes - accessible by both admin and teacher
+adminRouter.get("/questions/browse", isAuthenticated, isAdminOrTeacher, browseQuestions);
+adminRouter.get("/questions/stats", isAuthenticated, isAdminOrTeacher, getQuestionStats);
+adminRouter.get("/questions/filters", isAuthenticated, isAdminOrTeacher, getFilterOptions);
+adminRouter.post("/questions/similar", isAuthenticated, isAdminOrTeacher, searchSimilarQuestions);
+adminRouter.get("/questions/:questionId", isAuthenticated, isAdminOrTeacher, getQuestion);
+adminRouter.put("/questions/:questionId", isAuthenticated, isAdmin, updateQuestion);
+adminRouter.delete("/questions/:questionId", isAuthenticated, isAdmin, deleteQuestion);
 
 export default adminRouter;
 

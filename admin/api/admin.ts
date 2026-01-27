@@ -1066,4 +1066,148 @@ export async function deleteTestSession(testId: string) {
   return resp.data as { success: boolean; message: string };
 }
 
+// ============================================================
+// Question Database Browsing Types and Functions
+// ============================================================
+
+export type BrowseQuestion = {
+  _id: string;
+  text: string;
+  options: string[];
+  correctIndex?: number;
+  image?: string;
+  questionType: "objective" | "subjective";
+  subject: string;
+  chapter?: string;
+  difficulty?: "easy" | "medium" | "hard";
+  topics?: string[];
+  tags?: string[];
+  description?: string;
+  pineconeId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BrowseQuestionsParams = {
+  page?: number;
+  limit?: number;
+  search?: string;
+  subject?: string;
+  chapter?: string;
+  difficulty?: string;
+  questionType?: string;
+  tags?: string;
+  topics?: string;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+};
+
+export type BrowseQuestionsResponse = {
+  success: boolean;
+  data: BrowseQuestion[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+};
+
+// Browse questions with pagination and filters
+export async function browseQuestions(params: BrowseQuestionsParams = {}) {
+  const resp = await apiClient.get<BrowseQuestionsResponse>("/api/admin/questions/browse", { params });
+  return resp.data;
+}
+
+// Get a single question by ID
+export async function getQuestionById(questionId: string) {
+  const resp = await apiClient.get(`/api/admin/questions/${questionId}`);
+  return resp.data as { success: boolean; data: BrowseQuestion };
+}
+
+// Update a question
+export async function updateQuestion(questionId: string, updates: {
+  text?: string;
+  options?: string[];
+  correctIndex?: number | null;
+  image?: string | null;
+  questionType?: "objective" | "subjective";
+  chapter?: string | null;
+  difficulty?: "easy" | "medium" | "hard" | null;
+  topics?: string[];
+  tags?: string[];
+  description?: string | null;
+}) {
+  const resp = await apiClient.put(`/api/admin/questions/${questionId}`, updates);
+  return resp.data as { success: boolean; data: BrowseQuestion };
+}
+
+// Delete a question
+export async function deleteQuestionFromDb(questionId: string) {
+  const resp = await apiClient.delete(`/api/admin/questions/${questionId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Similarity search types and function
+export type SimilaritySearchParams = {
+  query?: string;
+  questionId?: string;
+  topK?: number;
+  subject?: string;
+  difficulty?: string;
+  excludeIds?: string[];
+};
+
+export type SimilarQuestion = BrowseQuestion & {
+  similarityScore: number;
+};
+
+export type SimilaritySearchResponse = {
+  success: boolean;
+  data: SimilarQuestion[];
+  meta: {
+    topK: number;
+    returned: number;
+    query: string;
+  };
+};
+
+// Search for similar questions using vector embeddings
+export async function searchSimilarQuestions(params: SimilaritySearchParams) {
+  const resp = await apiClient.post<SimilaritySearchResponse>("/api/admin/questions/similar", params);
+  return resp.data;
+}
+
+// Question stats types
+export type QuestionStats = {
+  total: number;
+  recentCount: number;
+  bySubject: { subject: string; count: number }[];
+  byDifficulty: { difficulty: string; count: number }[];
+  byType: { type: string; count: number }[];
+  topTags: { tag: string; count: number }[];
+  topTopics: { topic: string; count: number }[];
+  chaptersBySubject: {
+    subject: string;
+    chapters: { name: string; count: number }[];
+  }[];
+};
+
+// Get question database statistics
+export async function getQuestionStats() {
+  const resp = await apiClient.get("/api/admin/questions/stats");
+  return resp.data as { success: boolean; data: QuestionStats };
+}
+
+// Filter options types
+export type FilterOptions = {
+  subjects: string[];
+  chaptersBySubject: Record<string, string[]>;
+  tags: string[];
+  topics: string[];
+  difficulties: string[];
+  questionTypes: string[];
+};
+
+// Get available filter options
+export async function getFilterOptions() {
+  const resp = await apiClient.get("/api/admin/questions/filters");
+  return resp.data as { success: boolean; data: FilterOptions };
+}
+
 

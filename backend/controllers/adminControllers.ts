@@ -3682,4 +3682,462 @@ export const duplicateQuestionPaper = async (req: CustomRequest, res: Response) 
   }
 };
 
+// ============================================================
+// Question Database Browsing (Questions from curated DB)
+// ============================================================
+
+/**
+ * List questions with pagination, filtering, and text search
+ */
+export const browseQuestions = async (req: CustomRequest, res: Response) => {
+  try {
+    const {
+      page = "1",
+      limit = "20",
+      search,
+      subject,
+      chapter,
+      difficulty,
+      questionType,
+      tags,
+      topics,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query as Record<string, string | undefined>;
+
+    const pageNum = Math.max(parseInt(String(page || "1"), 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(String(limit || "20"), 10) || 20, 1), 100);
+
+    // Build query
+    const query: Record<string, unknown> = {};
+
+    // Text search (searches in text field)
+    if (search && String(search).trim().length > 0) {
+      const s = String(search).trim();
+      query.$or = [
+        { text: { $regex: s, $options: "i" } },
+        { description: { $regex: s, $options: "i" } },
+      ];
+    }
+
+    // Filter by subject
+    if (subject && String(subject).trim().length > 0) {
+      query.subject = String(subject).trim();
+    }
+
+    // Filter by chapter
+    if (chapter && String(chapter).trim().length > 0) {
+      query.chapter = String(chapter).trim();
+    }
+
+    // Filter by difficulty
+    if (difficulty && ["easy", "medium", "hard"].includes(String(difficulty).toLowerCase())) {
+      query.difficulty = String(difficulty).toLowerCase();
+    }
+
+    // Filter by question type
+    if (questionType && ["objective", "subjective"].includes(String(questionType).toLowerCase())) {
+      query.questionType = String(questionType).toLowerCase();
+    }
+
+    // Filter by tags (comma-separated)
+    if (tags && String(tags).trim().length > 0) {
+      const tagList = String(tags).split(",").map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        query.tags = { $in: tagList };
+      }
+    }
+
+    // Filter by topics (comma-separated)
+    if (topics && String(topics).trim().length > 0) {
+      const topicList = String(topics).split(",").map((t) => t.trim()).filter(Boolean);
+      if (topicList.length > 0) {
+        query.topics = { $in: topicList };
+      }
+    }
+
+    // Build sort
+    const validSortFields = ["createdAt", "updatedAt", "subject", "difficulty", "chapter"];
+    const sortField = validSortFields.includes(String(sortBy)) ? String(sortBy) : "createdAt";
+    const sortDir = String(sortOrder).toLowerCase() === "asc" ? 1 : -1;
+    const sort: Record<string, 1 | -1> = { [sortField]: sortDir };
+
+    const [items, total] = await Promise.all([
+      Question.find(query)
+        .sort(sort)
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .select("text options correctIndex image questionType subject chapter difficulty topics tags description pineconeId createdAt updatedAt"),
+      Question.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: items,
+      meta: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    console.error("Error browsing questions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Get a single question by ID
+ */
+export const getQuestion = async (req: CustomRequest, res: Response) => {
+  try {
+    const { questionId } = req.params;
+    if (!questionId) {
+      res.status(400).json({ success: false, message: "questionId is required" });
+      return;
+    }
+
+    const question = await Question.findById(questionId).lean();
+
+    if (!question) {
+      res.status(404).json({ success: false, message: "Question not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: question });
+  } catch (error) {
+    console.error("Error getting question:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Update a question in the database
+ */
+export const updateQuestion = async (req: CustomRequest, res: Response) => {
+  try {
+    const { questionId } = req.params;
+    if (!questionId) {
+      res.status(400).json({ success: false, message: "questionId is required" });
+      return;
+    }
+
+    const {
+      text,
+      options,
+      correctIndex,
+      image,
+      questionType,
+      chapter,
+      difficulty,
+      topics,
+      tags,
+      description,
+    } = req.body || {};
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (text !== undefined) updates.text = String(text).trim();
+    if (Array.isArray(options)) updates.options = options.map((o) => String(o || ""));
+    if (correctIndex !== undefined) updates.correctIndex = typeof correctIndex === "number" ? correctIndex : null;
+    if (image !== undefined) updates.image = image ? String(image) : null;
+    if (questionType !== undefined && ["objective", "subjective"].includes(questionType)) {
+      updates.questionType = questionType;
+    }
+    if (chapter !== undefined) updates.chapter = chapter ? String(chapter).trim() : null;
+    if (difficulty !== undefined && ["easy", "medium", "hard", null].includes(difficulty)) {
+      updates.difficulty = difficulty;
+    }
+    if (Array.isArray(topics)) updates.topics = topics.map((t) => String(t || "").trim()).filter(Boolean);
+    if (Array.isArray(tags)) updates.tags = tags.map((t) => String(t || "").trim()).filter(Boolean);
+    if (description !== undefined) updates.description = description ? String(description) : null;
+
+    const question = await Question.findByIdAndUpdate(questionId, updates, { new: true }).lean();
+
+    if (!question) {
+      res.status(404).json({ success: false, message: "Question not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: question });
+  } catch (error) {
+    console.error("Error updating question:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Delete a question from the database
+ */
+export const deleteQuestion = async (req: CustomRequest, res: Response) => {
+  try {
+    const { questionId } = req.params;
+    if (!questionId) {
+      res.status(400).json({ success: false, message: "questionId is required" });
+      return;
+    }
+
+    const result = await Question.findByIdAndDelete(questionId);
+
+    if (!result) {
+      res.status(404).json({ success: false, message: "Question not found" });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: "Question deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting question:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Similarity search using Pinecone vector embeddings
+ * Finds questions similar to a given query text or question ID
+ */
+export const searchSimilarQuestions = async (req: CustomRequest, res: Response) => {
+  try {
+    const {
+      query,
+      questionId,
+      topK = "10",
+      subject,
+      difficulty,
+      excludeIds,
+    } = req.body || {};
+
+    const topKNum = Math.min(Math.max(parseInt(String(topK || "10"), 10) || 10, 1), 50);
+
+    // Must provide either query text or questionId to search from
+    if (!query && !questionId) {
+      res.status(400).json({ 
+        success: false, 
+        message: "Either 'query' (text) or 'questionId' is required" 
+      });
+      return;
+    }
+
+    let embedding: number[];
+
+    if (questionId) {
+      // Get embedding from existing question's pinecone record
+      const question = await Question.findById(questionId).lean();
+      if (!question) {
+        res.status(404).json({ success: false, message: "Question not found" });
+        return;
+      }
+      // Generate embedding from the question text
+      const textToEmbed = `${question.text}\n${(question.options || []).join("\n")}`;
+      embedding = await getEmbeddingForText(textToEmbed);
+    } else {
+      // Generate embedding from query text
+      embedding = await getEmbeddingForText(String(query));
+    }
+
+    // Build Pinecone filter
+    const filter: Record<string, unknown> = {};
+    if (subject && String(subject).trim().length > 0) {
+      filter.subject = String(subject).trim();
+    }
+    if (difficulty && ["easy", "medium", "hard"].includes(String(difficulty).toLowerCase())) {
+      filter.difficulty = String(difficulty).toLowerCase();
+    }
+
+    // Query Pinecone
+    const pineconeMatches = await querySimilarInPinecone({
+      values: embedding,
+      topK: topKNum + (excludeIds?.length || 0) + (questionId ? 1 : 0), // Get extra to account for excludes
+      filter: Object.keys(filter).length > 0 ? filter : undefined,
+      includeMetadata: true,
+    });
+
+    // Get the pinecone IDs, excluding the source question and any explicitly excluded IDs
+    const excludeSet = new Set<string>([
+      ...(Array.isArray(excludeIds) ? excludeIds : []),
+      ...(questionId ? [questionId] : []),
+    ]);
+
+    const pineconeIds = pineconeMatches
+      .filter((m) => !excludeSet.has(m.id))
+      .slice(0, topKNum)
+      .map((m) => m.id);
+
+    // Fetch full question data from MongoDB
+    const questions = await Question.find({ pineconeId: { $in: pineconeIds } }).lean();
+
+    // Create a map for quick lookup and preserve score order
+    const questionMap = new Map(questions.map((q: any) => [q.pineconeId, q]));
+    const scoreMap = new Map(pineconeMatches.map((m) => [m.id, m.score]));
+
+    // Build result with similarity scores, preserving order
+    const results = pineconeIds
+      .map((pineconeId) => {
+        const question = questionMap.get(pineconeId);
+        if (!question) return null;
+        return {
+          ...question,
+          similarityScore: scoreMap.get(pineconeId) || 0,
+        };
+      })
+      .filter(Boolean);
+
+    res.status(200).json({
+      success: true,
+      data: results,
+      meta: {
+        topK: topKNum,
+        returned: results.length,
+        query: questionId ? `Similar to question ${questionId}` : String(query).substring(0, 100),
+      },
+    });
+  } catch (error) {
+    console.error("Error searching similar questions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Get question database statistics
+ */
+export const getQuestionStats = async (req: CustomRequest, res: Response) => {
+  try {
+    // Aggregate stats
+    const [
+      totalCount,
+      subjectCounts,
+      difficultyCounts,
+      typeCounts,
+      recentQuestions,
+      topTags,
+      topTopics,
+    ] = await Promise.all([
+      // Total question count
+      Question.countDocuments(),
+      
+      // Count by subject
+      Question.aggregate([
+        { $group: { _id: "$subject", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      
+      // Count by difficulty
+      Question.aggregate([
+        { $group: { _id: "$difficulty", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      
+      // Count by question type
+      Question.aggregate([
+        { $group: { _id: "$questionType", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      
+      // Recent questions (last 7 days count)
+      Question.countDocuments({
+        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+      }),
+      
+      // Top tags
+      Question.aggregate([
+        { $unwind: "$tags" },
+        { $group: { _id: "$tags", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 20 },
+      ]),
+      
+      // Top topics
+      Question.aggregate([
+        { $unwind: "$topics" },
+        { $group: { _id: "$topics", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 20 },
+      ]),
+    ]);
+
+    // Get unique chapters per subject
+    const chaptersBySubject = await Question.aggregate([
+      { $match: { chapter: { $ne: null, $exists: true } } },
+      { $group: { _id: { subject: "$subject", chapter: "$chapter" }, count: { $sum: 1 } } },
+      { $group: { 
+        _id: "$_id.subject", 
+        chapters: { $push: { name: "$_id.chapter", count: "$count" } } 
+      }},
+      { $sort: { _id: 1 } },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        total: totalCount,
+        recentCount: recentQuestions,
+        bySubject: subjectCounts.map((s: any) => ({ subject: s._id, count: s.count })),
+        byDifficulty: difficultyCounts.map((d: any) => ({ difficulty: d._id || "unset", count: d.count })),
+        byType: typeCounts.map((t: any) => ({ type: t._id || "objective", count: t.count })),
+        topTags: topTags.map((t: any) => ({ tag: t._id, count: t.count })),
+        topTopics: topTopics.map((t: any) => ({ topic: t._id, count: t.count })),
+        chaptersBySubject: chaptersBySubject.map((s: any) => ({
+          subject: s._id,
+          chapters: s.chapters.sort((a: any, b: any) => b.count - a.count),
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Error getting question stats:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * Get available filter options (subjects, chapters, tags, etc.)
+ */
+export const getFilterOptions = async (req: CustomRequest, res: Response) => {
+  try {
+    const [subjects, chapters, tags, topics] = await Promise.all([
+      // Unique subjects
+      Question.distinct("subject"),
+      
+      // Unique chapters (with their subjects)
+      Question.aggregate([
+        { $match: { chapter: { $ne: null, $exists: true } } },
+        { $group: { _id: { subject: "$subject", chapter: "$chapter" } } },
+        { $group: { _id: "$_id.subject", chapters: { $push: "$_id.chapter" } } },
+        { $sort: { _id: 1 } },
+      ]),
+      
+      // Unique tags
+      Question.aggregate([
+        { $unwind: "$tags" },
+        { $group: { _id: "$tags" } },
+        { $sort: { _id: 1 } },
+      ]),
+      
+      // Unique topics
+      Question.aggregate([
+        { $unwind: "$topics" },
+        { $group: { _id: "$topics" } },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        subjects: subjects.filter(Boolean).sort(),
+        chaptersBySubject: chapters.reduce((acc: Record<string, string[]>, item: any) => {
+          acc[item._id] = (item.chapters || []).filter(Boolean).sort();
+          return acc;
+        }, {}),
+        tags: tags.map((t: any) => t._id).filter(Boolean),
+        topics: topics.map((t: any) => t._id).filter(Boolean),
+        difficulties: ["easy", "medium", "hard"],
+        questionTypes: ["objective", "subjective"],
+      },
+    });
+  } catch (error) {
+    console.error("Error getting filter options:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
 
