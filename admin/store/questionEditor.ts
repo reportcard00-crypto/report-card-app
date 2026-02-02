@@ -48,6 +48,7 @@ export type QuestionEditorState = {
   addChapterForSubject: (subject: string, chapter: string) => void;
   setDescription: (questionId: string, description: string | null) => void;
   setQuestionType: (questionId: string, questionType: QuestionType) => void;
+  removeQuestion: (questionId: string) => void;
   // Streaming support
   clearQuestions: () => void;
   addStreamedQuestion: (data: {
@@ -226,6 +227,12 @@ export const useQuestionEditorStore = create<QuestionEditorState>((set, get) => 
     set((state) => ({
       questions: state.questions.map((q) => (q.id === questionId ? { ...q, questionType } : q)),
     })),
+  removeQuestion: (questionId) =>
+    set((state) => {
+      const filtered = state.questions.filter((q) => q.id !== questionId);
+      const newIndex = Math.min(state.selectedIndex, Math.max(filtered.length - 1, 0));
+      return { questions: filtered, selectedIndex: newIndex };
+    }),
   addChapterForSubject: (subject, chapter) =>
     set((state) => {
       const trimmed = chapter.trim();

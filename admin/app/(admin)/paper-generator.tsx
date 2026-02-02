@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Platform, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { SUBJECTS, SUBJECT_TO_CHAPTERS, useQuestionEditorStore, type QuestionType } from "@/store/questionEditor";
@@ -26,6 +26,11 @@ const MODEL_OPTIONS: { value: ModelVersion; label: string; endpoint: string }[] 
   { value: "v2", label: "Model 2", endpoint: "/api/admin/papers/generate-v2" },
 ];
 
+// Editable question type
+type EditableQuestion = (GeneratedPaperItem | GeneratedPaperItemV1_5 | GeneratedPaperItemV2) & {
+  isEditing?: boolean;
+};
+
 export default function PaperGeneratorScreen() {
   const router = useRouter();
   const customChaptersBySubject = useQuestionEditorStore((s) => s.customChaptersBySubject);
@@ -47,7 +52,8 @@ export default function PaperGeneratorScreen() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [paperTitle, setPaperTitle] = useState<string>("");
-  const [results, setResults] = useState<(GeneratedPaperItem | GeneratedPaperItemV1_5 | GeneratedPaperItemV2)[]>([]);
+  const [results, setResults] = useState<EditableQuestion[]>([]);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   const chapters = useMemo(() => {
     if (!subject) return [];
@@ -161,7 +167,73 @@ export default function PaperGeneratorScreen() {
   const onClearResults = () => {
     setResults([]);
     setPaperTitle("");
+    setEditingIndex(null);
   };
+
+  // Edit handlers
+  const updateQuestion = useCallback((idx: number, field: string, value: any) => {
+    setResults((prev) => {
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], [field]: value };
+      return updated;
+    });
+  }, []);
+
+  const updateOption = useCallback((qIdx: number, optIdx: number, value: string) => {
+    setResults((prev) => {
+      const updated = [...prev];
+      const options = [...(updated[qIdx].options || [])];
+      options[optIdx] = value;
+      updated[qIdx] = { ...updated[qIdx], options };
+      return updated;
+    });
+  }, []);
+
+  const addOption = useCallback((qIdx: number) => {
+    setResults((prev) => {
+      const updated = [...prev];
+      const options = [...(updated[qIdx].options || []), ""];
+      updated[qIdx] = { ...updated[qIdx], options };
+      return updated;
+    });
+  }, []);
+
+  const removeOption = useCallback((qIdx: number, optIdx: number) => {
+    setResults((prev) => {
+      const updated = [...prev];
+      const options = [...(updated[qIdx].options || [])];
+      options.splice(optIdx, 1);
+      // Adjust correctIndex if needed
+      let correctIndex = updated[qIdx].correctIndex;
+      if (typeof correctIndex === "number") {
+        if (optIdx === correctIndex) {
+          correctIndex = 0;
+        } else if (optIdx < correctIndex) {
+          correctIndex = correctIndex - 1;
+        }
+      }
+      updated[qIdx] = { ...updated[qIdx], options, correctIndex };
+      return updated;
+    });
+  }, []);
+
+  const deleteQuestion = useCallback((idx: number) => {
+    Alert.alert(
+      "Delete Question",
+      `Are you sure you want to delete Q${idx + 1}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: () => {
+            setResults((prev) => prev.filter((_, i) => i !== idx));
+            if (editingIndex === idx) setEditingIndex(null);
+          }
+        }
+      ]
+    );
+  }, [editingIndex]);
 
   const onSavePaper = async () => {
     if (!subject) {
@@ -453,40 +525,124 @@ export default function PaperGeneratorScreen() {
           <View style={{ gap: 12 }}>
             {results.map((q, idx) => {
               const correct = typeof q.correctIndex === "number" ? q.correctIndex : -1;
+              const isEditing = editingIndex === idx;
+              
               return (
-                <View key={`${idx}-${q.text.slice(0, 16)}`} style={styles.card}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <Text style={styles.qIndex}>Q{idx + 1}.</Text>
-                    {paperType === "subjective" && (
-                      <View style={styles.subjectiveBadge}>
-                        <Text style={styles.subjectiveBadgeText}>Subjective</Text>
-                      </View>
-                    )}
+                <View key={`${idx}-${q.text.slice(0, 16)}`} style={[styles.card, isEditing && styles.cardEditing]}>
+                  {/* Header with Q number, badges, and edit/delete buttons */}
+                  <View style={styles.cardHeader}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <Text style={styles.qIndex}>Q{idx + 1}.</Text>
+                      {paperType === "subjective" && (
+                        <View style={styles.subjectiveBadge}>
+                          <Text style={styles.subjectiveBadgeText}>Subjective</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 6 }}>
+                      <Pressable 
+                        onPress={() => setEditingIndex(isEditing ? null : idx)} 
+                        style={[styles.editBtn, isEditing && styles.editBtnActive]}
+                      >
+                        <Text style={[styles.editBtnText, isEditing && styles.editBtnTextActive]}>
+                          {isEditing ? "✓ Done" : "✎ Edit"}
+                        </Text>
+                      </Pressable>
+                      <Pressable onPress={() => deleteQuestion(idx)} style={styles.deleteBtn}>
+                        <Text style={styles.deleteBtnText}>✕</Text>
+                      </Pressable>
+                    </View>
                   </View>
-                  <Text style={styles.qText}>{q.text}</Text>
-                  {/* Only show options for objective papers */}
+
+                  {/* Question Text */}
+                  {isEditing ? (
+                    <TextInput
+                      style={styles.editInput}
+                      value={q.text}
+                      onChangeText={(val) => updateQuestion(idx, "text", val)}
+                      multiline
+                      placeholder="Question text..."
+                    />
+                  ) : (
+                    <Text style={styles.qText}>{q.text}</Text>
+                  )}
+
+                  {/* Options for objective papers */}
                   {paperType === "objective" && (
                     <View style={{ gap: 6, marginTop: 8 }}>
                       {Array.isArray(q.options) && q.options.map((opt, i) => (
-                        <View key={i} style={[styles.optRow, i === correct && styles.optCorrect]}>
-                          <Text style={[styles.optBullet, i === correct && styles.optBulletCorrect]}>{String.fromCharCode(65 + i)}.</Text>
-                          <Text style={[styles.optText, i === correct && styles.optTextCorrect]}>{opt}</Text>
+                        <View key={i} style={[styles.optRow, i === correct && styles.optCorrect, isEditing && styles.optRowEditing]}>
+                          {isEditing ? (
+                            <>
+                              <Pressable 
+                                onPress={() => updateQuestion(idx, "correctIndex", i)}
+                                style={[styles.correctToggle, i === correct && styles.correctToggleActive]}
+                              >
+                                <Text style={[styles.optBullet, i === correct && styles.optBulletCorrect]}>
+                                  {i === correct ? "✓" : String.fromCharCode(65 + i)}
+                                </Text>
+                              </Pressable>
+                              <TextInput
+                                style={[styles.editOptionInput, i === correct && styles.editOptionInputCorrect]}
+                                value={opt}
+                                onChangeText={(val) => updateOption(idx, i, val)}
+                                placeholder={`Option ${String.fromCharCode(65 + i)}...`}
+                              />
+                              {(q.options?.length ?? 0) > 2 && (
+                                <Pressable onPress={() => removeOption(idx, i)} style={styles.removeOptionBtn}>
+                                  <Text style={styles.removeOptionText}>✕</Text>
+                                </Pressable>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <Text style={[styles.optBullet, i === correct && styles.optBulletCorrect]}>
+                                {String.fromCharCode(65 + i)}.
+                              </Text>
+                              <Text style={[styles.optText, i === correct && styles.optTextCorrect]}>{opt}</Text>
+                            </>
+                          )}
                         </View>
                       ))}
+                      {isEditing && (
+                        <Pressable onPress={() => addOption(idx)} style={styles.addOptionBtn}>
+                          <Text style={styles.addOptionText}>+ Add Option</Text>
+                        </Pressable>
+                      )}
                     </View>
                   )}
+
                   {paperType === "subjective" && (
                     <View style={styles.answerSpace}>
                       <Text style={styles.answerSpaceText}>📝 Answer space for written response</Text>
                     </View>
                   )}
-                  <View style={styles.metaRow}>
-                    <Text style={styles.metaPill}>{q.difficulty}</Text>
-                    {!!q.chapter && <Text style={styles.metaPill}>{q.chapter}</Text>}
-                    {Array.isArray(q.topics) && q.topics.slice(0, 3).map((t, i) => (
-                      <Text key={i} style={styles.metaPill}>{t}</Text>
-                    ))}
-                  </View>
+
+                  {/* Metadata (difficulty, chapter, topics) */}
+                  {isEditing ? (
+                    <View style={styles.editMetaSection}>
+                      <Text style={styles.editMetaLabel}>Difficulty:</Text>
+                      <View style={styles.rowWrap}>
+                        {DIFFICULTIES.map((d) => (
+                          <Pressable 
+                            key={d} 
+                            onPress={() => updateQuestion(idx, "difficulty", d)}
+                            style={[styles.miniChip, q.difficulty === d && styles.miniChipActive]}
+                          >
+                            <Text style={[styles.miniChipText, q.difficulty === d && styles.miniChipTextActive]}>{d}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.metaRow}>
+                      <Text style={styles.metaPill}>{q.difficulty}</Text>
+                      {!!q.chapter && <Text style={styles.metaPill}>{q.chapter}</Text>}
+                      {Array.isArray(q.topics) && q.topics.slice(0, 3).map((t, i) => (
+                        <Text key={i} style={styles.metaPill}>{t}</Text>
+                      ))}
+                    </View>
+                  )}
                 </View>
               );
             })}
@@ -534,9 +690,12 @@ const styles = StyleSheet.create({
   dangerBtn: { backgroundColor: "#dc2626" },
   // results
   card: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 12, backgroundColor: "#fff", gap: 6 },
+  cardEditing: { borderColor: "#3b82f6", borderWidth: 2, backgroundColor: "#f0f9ff" },
+  cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
   qIndex: { fontSize: 12, color: "#6b7280" },
   qText: { fontSize: 14, color: "#111827" },
   optRow: { flexDirection: "row", gap: 8, alignItems: "flex-start", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8 },
+  optRowEditing: { alignItems: "center" },
   optCorrect: { backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#a7f3d0" },
   optBullet: { width: 20, color: "#374151", fontWeight: "600" },
   optBulletCorrect: { color: "#065f46" },
@@ -544,6 +703,28 @@ const styles = StyleSheet.create({
   optTextCorrect: { color: "#065f46", fontWeight: "600" },
   metaRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   metaPill: { borderWidth: 1, borderColor: "#e5e7eb", color: "#111827", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, fontSize: 12, backgroundColor: "#f9fafb" },
+  // Edit mode styles
+  editBtn: { backgroundColor: "#f3f4f6", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: "#e5e7eb" },
+  editBtnActive: { backgroundColor: "#3b82f6", borderColor: "#3b82f6" },
+  editBtnText: { color: "#374151", fontSize: 12, fontWeight: "500" },
+  editBtnTextActive: { color: "#fff" },
+  deleteBtn: { backgroundColor: "#fee2e2", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: "#fecaca" },
+  deleteBtnText: { color: "#dc2626", fontSize: 12, fontWeight: "600" },
+  editInput: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 8, padding: 10, backgroundColor: "#fff", fontSize: 14, minHeight: 60, textAlignVertical: "top" },
+  editOptionInput: { flex: 1, borderWidth: 1, borderColor: "#d1d5db", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: "#fff", fontSize: 14 },
+  editOptionInputCorrect: { borderColor: "#10b981", backgroundColor: "#ecfdf5" },
+  correctToggle: { width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: "#d1d5db", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
+  correctToggleActive: { borderColor: "#10b981", backgroundColor: "#d1fae5" },
+  removeOptionBtn: { width: 28, height: 28, borderRadius: 6, backgroundColor: "#fee2e2", alignItems: "center", justifyContent: "center" },
+  removeOptionText: { color: "#dc2626", fontSize: 12, fontWeight: "600" },
+  addOptionBtn: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 8, paddingVertical: 8, alignItems: "center", backgroundColor: "#f9fafb", borderStyle: "dashed" },
+  addOptionText: { color: "#6b7280", fontSize: 13 },
+  editMetaSection: { marginTop: 8, gap: 6 },
+  editMetaLabel: { fontSize: 12, color: "#6b7280", fontWeight: "500" },
+  miniChip: { borderWidth: 1, borderColor: "#d1d5db", borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: "#fff" },
+  miniChipActive: { backgroundColor: "#111827", borderColor: "#111827" },
+  miniChipText: { color: "#374151", fontSize: 12 },
+  miniChipTextActive: { color: "#fff", fontWeight: "600" },
 });
 
 

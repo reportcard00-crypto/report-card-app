@@ -132,6 +132,7 @@ const QuestionEditor = () => {
     setTags,
     setDescription,
     setQuestionType,
+    removeQuestion,
   } = useQuestionEditorStore();
   const selectedSubject = useQuestionEditorStore((s: QuestionEditorState) => s.selectedSubject);
   const addChapterForSubject = useQuestionEditorStore((s: QuestionEditorState) => s.addChapterForSubject);
@@ -148,6 +149,7 @@ const QuestionEditor = () => {
   const [showRawEditor, setShowRawEditor] = useState(false);
   const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const fileToDataUrl = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -265,10 +267,85 @@ const QuestionEditor = () => {
     <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <Text style={{ fontSize: 18, fontWeight: "600" }}>Question Editor</Text>
-        <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <Pressable
+            onPress={() => setShowDeleteConfirm(true)}
+            style={{
+              backgroundColor: "#fee2e2",
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: "#fca5a5",
+            }}
+          >
+            <Text style={{ color: "#dc2626", fontWeight: "600", fontSize: 14 }}>🗑 Delete Question</Text>
+          </Pressable>
           <Button title="Back" onPress={() => router.replace("/(admin)/question-db")} />
         </View>
       </View>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <View style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.5)",
+          justifyContent: "center",
+          alignItems: "center",
+          zIndex: 1000,
+        }}>
+          <View style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 12,
+            maxWidth: 400,
+            width: "90%",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.25,
+            shadowRadius: 12,
+            elevation: 8,
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: "600", marginBottom: 12, color: "#111" }}>
+              Delete Question?
+            </Text>
+            <Text style={{ color: "#666", marginBottom: 20, lineHeight: 22 }}>
+              Are you sure you want to delete question {currentNumber} of {total}? This action cannot be undone.
+            </Text>
+            <View style={{ flexDirection: "row", gap: 12, justifyContent: "flex-end" }}>
+              <Pressable
+                onPress={() => setShowDeleteConfirm(false)}
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 6,
+                  backgroundColor: "#f3f4f6",
+                }}
+              >
+                <Text style={{ color: "#374151", fontWeight: "500" }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  removeQuestion(current.id);
+                  setShowDeleteConfirm(false);
+                }}
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 6,
+                  backgroundColor: "#dc2626",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Delete</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Streaming Progress Banner */}
       {isStreaming && (

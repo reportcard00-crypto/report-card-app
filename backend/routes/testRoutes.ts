@@ -12,8 +12,13 @@ import {
   submitTest,
   getStudentResult,
   deleteTestSession,
+  getTeacherAnalytics,
+  getTestOverview,
+  getAdminAnalytics,
+  getStudentDashboard,
+  getStudentTestDetail,
 } from "../controllers/testController";
-import { isAuthenticated, isAdminOrTeacher } from "../middlewares/auth";
+import { isAuthenticated, isAdminOrTeacher, isAdmin } from "../middlewares/auth";
 
 const testRouter = Router();
 
@@ -46,11 +51,30 @@ testRouter.get("/sessions/:testId/status", isAuthenticated, isAdminOrTeacher, ge
 testRouter.delete("/sessions/:testId", isAuthenticated, isAdminOrTeacher, deleteTestSession);
 
 // ============================================================
+// Analytics Routes
+// ============================================================
+
+// Teacher analytics - overview dashboard (accessible by teachers and admins)
+testRouter.get("/analytics/teacher", isAuthenticated, isAdminOrTeacher, getTeacherAnalytics);
+
+// Test overview - detailed table view for a specific test
+testRouter.get("/analytics/test-overview", isAuthenticated, isAdminOrTeacher, getTestOverview);
+
+// Admin analytics - school-wide dashboard (admin only)
+testRouter.get("/analytics/admin", isAuthenticated, isAdmin, getAdminAnalytics);
+
+// ============================================================
 // Student Routes
 // ============================================================
 
 // Get active tests for the current student (for polling)
 testRouter.get("/active", isAuthenticated, getActiveTestsForStudent);
+
+// Get student dashboard analytics (overall performance, strengths, weaknesses, insights)
+testRouter.get("/student/dashboard", isAuthenticated, getStudentDashboard);
+
+// Get detailed test result with chapter breakdown and analysis
+testRouter.get("/student/:testId/detail", isAuthenticated, getStudentTestDetail);
 
 // Start a test (student)
 testRouter.post("/:testId/start", isAuthenticated, startTestForStudent);

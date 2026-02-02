@@ -48,7 +48,6 @@ export default function AdminLayout() {
         name="analytics" 
         options={{ 
           title: "Analytics",
-          drawerItemStyle: isAdmin ? {} : { display: "none" }
         }} 
       />
       <Drawer.Screen 

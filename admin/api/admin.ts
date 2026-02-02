@@ -1210,4 +1210,132 @@ export async function getFilterOptions() {
   return resp.data as { success: boolean; data: FilterOptions };
 }
 
+// ============================================================
+// Analytics Types and Functions
+// ============================================================
+
+export type ClassTrendItem = {
+  testName: string;
+  date: string;
+  avgScore: number;
+  participation: number;
+};
+
+export type LatestTestSnapshot = {
+  testName: string;
+  subject: string;
+  avgScore: number;
+  participationRate: number;
+  totalStudents: number;
+  participated: number;
+  date: string;
+};
+
+export type WeakChapter = {
+  chapter: string;
+  subject: string;
+  accuracy: number;
+  totalAttempts: number;
+};
+
+export type StudentPerformance = {
+  _id: string;
+  name: string;
+  phone: string;
+  avgScore: number;
+  testsTaken: number;
+  trend: number;
+  recentScores: number[];
+};
+
+export type TeacherAnalyticsData = {
+  classTrend: ClassTrendItem[];
+  latestTestSnapshot: LatestTestSnapshot | null;
+  weakChapters: WeakChapter[];
+  studentSegmentation: {
+    topPerformers: StudentPerformance[];
+    atRiskStudents: StudentPerformance[];
+  };
+  insights: string[];
+  classrooms: { _id: string; name: string; studentsCount: number }[];
+};
+
+export type TestOverviewStudent = {
+  _id: string;
+  name: string;
+  phone: string;
+  score: number;
+  accuracy: number;
+  weakChapters: string[];
+  timeUsed: number;
+  status: string;
+  correctAnswers: number;
+  wrongAnswers: number;
+  attemptedQuestions: number;
+  totalQuestions: number;
+};
+
+export type TestOverviewData = {
+  testSession: {
+    _id: string;
+    title: string;
+    subject: string;
+    chapter?: string;
+    status: string;
+    startedAt?: string;
+    totalStudents: number;
+    participated: number;
+  } | null;
+  students: TestOverviewStudent[];
+};
+
+export type SubjectTile = {
+  subject: string;
+  avgScore: number;
+  participation: number;
+  trend: "improving" | "declining" | "stable";
+  testCount: number;
+  recentScores: number[];
+};
+
+export type TeacherOverviewItem = {
+  _id: string;
+  name: string;
+  phone: string;
+  testsCount: number;
+  avgScore: number;
+  trend: "improving" | "declining" | "stable";
+  lastTestDate: string | null;
+};
+
+export type AdminAnalyticsData = {
+  overview: {
+    totalTests: number;
+    totalStudents: number;
+    totalTeachers: number;
+    totalClassrooms: number;
+  };
+  subjectTiles: SubjectTile[];
+  teacherOverview: TeacherOverviewItem[];
+  insights: string[];
+};
+
+// Get teacher analytics
+export async function getTeacherAnalytics(params: { teacherId?: string } = {}) {
+  const resp = await apiClient.get("/api/tests/analytics/teacher", { params });
+  return resp.data as { success: boolean; data: TeacherAnalyticsData };
+}
+
+// Get test overview (detailed table view)
+export async function getTestOverviewData(params: { testId?: string; classroomId?: string } = {}) {
+  const resp = await apiClient.get("/api/tests/analytics/test-overview", { params });
+  return resp.data as { success: boolean; data: TestOverviewData };
+}
+
+// Get admin analytics (school-wide)
+export async function getAdminAnalytics() {
+  const resp = await apiClient.get("/api/tests/analytics/admin");
+  return resp.data as { success: boolean; data: AdminAnalyticsData };
+}
+
 

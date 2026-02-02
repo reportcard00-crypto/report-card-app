@@ -133,3 +133,159 @@ export async function getTestResult(testId: string) {
   const resp = await apiClient.get(`/api/tests/${testId}/result`);
   return resp.data as { success: boolean; data: TestResultData };
 }
+
+// ============================================================
+// Student Dashboard Analytics Types and Functions
+// ============================================================
+
+export type StudentDashboardKPIs = {
+  avgScore: number;
+  accuracyPercent: number;
+  testsAttempted: number;
+  testsAssigned: number;
+};
+
+export type PerformanceTrendItem = {
+  testId: string;
+  testName: string;
+  subject: string;
+  score: number;
+  accuracy: number;
+  date: string;
+};
+
+export type ChapterStrength = {
+  subject: string;
+  chapter: string;
+  accuracy: number;
+  totalAttempted: number;
+  correctCount: number;
+};
+
+export type DashboardInsight = {
+  type: "improvement" | "warning" | "info";
+  message: string;
+};
+
+export type RecentTest = {
+  _id: string;
+  testName: string;
+  subject: string;
+  classroom: string;
+  score: number;
+  correctAnswers: number;
+  totalQuestions: number;
+  attemptedQuestions: number;
+  timeTaken: number;
+  submittedAt: string;
+  status: string;
+};
+
+export type StudentDashboardData = {
+  kpis: StudentDashboardKPIs;
+  performanceTrend: PerformanceTrendItem[];
+  strengths: ChapterStrength[];
+  weaknesses: ChapterStrength[];
+  insights: DashboardInsight[];
+  recommendations: string[];
+  recentTests: RecentTest[];
+};
+
+// Get student dashboard analytics
+export async function getStudentDashboard() {
+  const resp = await apiClient.get(`/api/tests/student/dashboard`);
+  return resp.data as { success: boolean; data: StudentDashboardData };
+}
+
+// ============================================================
+// Test Detail Analytics Types
+// ============================================================
+
+export type TestScorecard = {
+  score: number;
+  correctAnswers: number;
+  wrongAnswers: number;
+  skipped: number;
+  totalQuestions: number;
+  attemptedQuestions: number;
+  accuracy: number;
+  timeTaken: number;
+  avgTimePerQuestion: number;
+};
+
+export type ChapterBreakdown = {
+  chapter: string;
+  subject: string;
+  correct: number;
+  wrong: number;
+  skipped: number;
+  total: number;
+  accuracy: number;
+};
+
+export type QuestionTypeBreakdown = {
+  type: string;
+  correct: number;
+  wrong: number;
+  skipped: number;
+  total: number;
+  accuracy: number;
+};
+
+export type DifficultyBreakdown = {
+  difficulty: string;
+  correct: number;
+  wrong: number;
+  skipped: number;
+  total: number;
+  accuracy: number;
+};
+
+export type MistakePattern = {
+  chapter: string;
+  count: number;
+  questions: {
+    text: string;
+    correctAnswer: string;
+    yourAnswer: string;
+  }[];
+};
+
+export type TestDetailQuestion = {
+  _id: string;
+  text: string;
+  options: string[];
+  image?: string;
+  chapter?: string;
+  difficulty?: string;
+  questionType: string;
+  correctIndex: number;
+  selectedIndex: number | null;
+  isCorrect: boolean;
+  timeTaken: number;
+};
+
+export type TestDetailData = {
+  testInfo: {
+    _id: string;
+    title: string;
+    subject: string;
+    chapter?: string;
+    classroom: string;
+    submittedAt: string;
+    status: string;
+  };
+  scorecard: TestScorecard;
+  chapterBreakdown: ChapterBreakdown[];
+  questionTypeBreakdown: QuestionTypeBreakdown[];
+  difficultyBreakdown: DifficultyBreakdown[];
+  mistakePatterns: MistakePattern[];
+  recommendations: string[];
+  questions: TestDetailQuestion[];
+};
+
+// Get detailed test result with chapter breakdown and analysis
+export async function getTestDetail(testId: string) {
+  const resp = await apiClient.get(`/api/tests/student/${testId}/detail`);
+  return resp.data as { success: boolean; data: TestDetailData };
+}
