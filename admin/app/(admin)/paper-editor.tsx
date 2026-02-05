@@ -12,6 +12,7 @@ import {
   type PaperQuestion,
 } from "@/api/admin";
 import { SUBJECTS, SUBJECT_TO_CHAPTERS } from "@/store/questionEditor";
+import MathMarkdown from "@/components/MathMarkdown";
 
 const DIFFICULTIES: ("easy" | "medium" | "hard")[] = ["easy", "medium", "hard"];
 const STATUSES: ("draft" | "finalized" | "archived")[] = ["draft", "finalized", "archived"];
@@ -431,7 +432,9 @@ export default function PaperEditorScreen() {
                   </View>
                 </View>
 
-                <Text style={styles.questionText}>{q.text}</Text>
+                <View style={{ marginBottom: 12 }}>
+                  <MathMarkdown content={q.text} fontSize={15} />
+                </View>
 
                 {q.image && (
                   <View style={styles.imageContainer}>
@@ -447,7 +450,13 @@ export default function PaperEditorScreen() {
                         <Text style={[styles.optionLetter, i === correct && styles.optionLetterCorrect]}>
                           {String.fromCharCode(65 + i)}.
                         </Text>
-                        <Text style={[styles.optionText, i === correct && styles.optionTextCorrect]}>{opt}</Text>
+                        <View style={{ flex: 1 }}>
+                          <MathMarkdown 
+                            content={opt} 
+                            fontSize={14} 
+                            style={i === correct ? { color: "#065f46", fontWeight: 500 } : { color: "#374151" }} 
+                          />
+                        </View>
                       </View>
                     ))}
                   </View>

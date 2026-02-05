@@ -652,6 +652,132 @@ export async function createQuestionPaper(params: {
   };
 }
 
+// Upload a file and get URL (helper for PDF upload)
+export async function uploadFileDirect(file: Blob, fileName: string, fileType: string) {
+  // Convert blob to base64
+  const reader = new FileReader();
+  const dataBase64 = await new Promise<string>((resolve, reject) => {
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const resp = await apiClient.post(`/api/file/upload-direct`, {
+    fileName,
+    fileType,
+    dataBase64,
+    isPermanent: true,
+  });
+  return resp.data as { publicUrl: string };
+}
+
+// PDF extraction progress callback types
+export type PdfExtractionEvent = 
+  | { type: "status"; message: string; progress: number; totalPages?: number; currentPage?: number }
+  | { type: "question_extracted"; index: number; question: string; questionType: string; hasImage: boolean }
+  | { type: "page_complete"; page: number; totalPages: number; questionsFound: number }
+  | { type: "complete"; success: boolean; paperId: string; title: string; subject: string; questionsCount: number; message: string }
+  | { type: "error"; message: string; details?: string };
+
+// Upload PDF and extract questions to create a question paper (streaming)
+export async function uploadPdfToQuestionPaper(
+  params: {
+    fileUrl: string;
+    fileName: string;
+    title?: string;
+    subject: string;
+    startPage?: number;
+    numPages?: number;
+  },
+  onProgress: (event: PdfExtractionEvent) => void
+): Promise<{ paperId: string; title: string; questionsCount: number }> {
+  const token = await store.get("token");
+  
+  return new Promise((resolve, reject) => {
+    const eventSource = new EventSource(
+      `${baseUrl}/api/admin/papers/upload-pdf?token=${token}`,
+      { withCredentials: false }
+    );
+
+    // We need to use fetch with POST for SSE with body, so let's use fetch instead
+    fetch(`${baseUrl}/api/admin/papers/upload-pdf`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: JSON.stringify(params),
+    }).then(async response => {
+      if (!response.ok) {
+        const errorText = await response.text();
+        reject(new Error(errorText || 'Failed to start PDF extraction'));
+        return;
+      }
+      
+      const reader = response.body?.getReader();
+      if (!reader) {
+        reject(new Error('No response body'));
+        return;
+      }
+      
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Parse SSE events
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        
+        let currentEvent = '';
+        let currentData = '';
+        
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            currentData = line.slice(6);
+            
+            if (currentEvent && currentData) {
+              try {
+                const data = JSON.parse(currentData);
+                
+                if (currentEvent === 'status') {
+                  onProgress({ type: 'status', ...data });
+                } else if (currentEvent === 'question_extracted') {
+                  onProgress({ type: 'question_extracted', ...data });
+                } else if (currentEvent === 'page_complete') {
+                  onProgress({ type: 'page_complete', ...data });
+                } else if (currentEvent === 'complete') {
+                  onProgress({ type: 'complete', ...data });
+                  resolve({
+                    paperId: data.paperId,
+                    title: data.title,
+                    questionsCount: data.questionsCount,
+                  });
+                } else if (currentEvent === 'error') {
+                  onProgress({ type: 'error', ...data });
+                  reject(new Error(data.message || 'Extraction failed'));
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', e);
+              }
+              
+              currentEvent = '';
+              currentData = '';
+            }
+          }
+        }
+      }
+    }).catch(reject);
+  });
+}
+
 // List question papers with pagination
 export async function listQuestionPapers(params: {
   page?: number;

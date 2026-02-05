@@ -18,6 +18,7 @@ import {
   generateQuestionPaperv2,
   // Question Paper CRUD
   createQuestionPaper,
+  uploadPdfToQuestionPaper,
   listQuestionPapers,
   getQuestionPaper,
   updateQuestionPaper,
@@ -61,6 +62,7 @@ adminRouter.post("/papers/generate-v2", isAuthenticated, isAdminOrTeacher, gener
 
 // Question Paper CRUD routes - accessible by both admin and teacher
 adminRouter.post("/papers", isAuthenticated, isAdminOrTeacher, createQuestionPaper);
+adminRouter.post("/papers/upload-pdf", isAuthenticated, isAdminOrTeacher, uploadPdfToQuestionPaper);
 adminRouter.get("/papers", isAuthenticated, isAdminOrTeacher, listQuestionPapers);
 adminRouter.get("/papers/:paperId", isAuthenticated, isAdminOrTeacher, getQuestionPaper);
 adminRouter.put("/papers/:paperId", isAuthenticated, isAdminOrTeacher, updateQuestionPaper);

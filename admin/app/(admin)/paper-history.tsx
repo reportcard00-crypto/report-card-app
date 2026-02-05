@@ -8,9 +8,13 @@ import {
   listClassrooms,
   assignPaperToClassroom,
   startTest,
+  uploadFileDirect,
+  uploadPdfToQuestionPaper,
   type QuestionPaperListItem,
   type ClassroomListItem,
+  type PdfExtractionEvent,
 } from "@/api/admin";
+import * as DocumentPicker from 'expo-document-picker';
 import { SUBJECTS } from "@/store/questionEditor";
 
 const STATUSES = ["all", "draft", "finalized", "archived"] as const;
@@ -40,6 +44,18 @@ export default function PaperHistoryScreen() {
   const [assignedTestId, setAssignedTestId] = useState<string | null>(null);
   const [timeLimitMinutes, setTimeLimitMinutes] = useState("30");
   const [isStarting, setIsStarting] = useState(false);
+
+  // PDF upload modal state
+  const [showPdfUploadModal, setShowPdfUploadModal] = useState(false);
+  const [pdfFile, setPdfFile] = useState<{ uri: string; name: string; type: string } | null>(null);
+  const [pdfTitle, setPdfTitle] = useState("");
+  const [pdfSubject, setPdfSubject] = useState("");
+  const [pdfStartPage, setPdfStartPage] = useState("1");
+  const [pdfNumPages, setPdfNumPages] = useState("10");
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [questionsExtracted, setQuestionsExtracted] = useState(0);
 
   const fetchPapers = useCallback(async (showLoading = true) => {
     try {
@@ -210,6 +226,118 @@ export default function PaperHistoryScreen() {
     }
   };
 
+  const handleOpenPdfUploadModal = () => {
+    setPdfFile(null);
+    setPdfTitle("");
+    setPdfSubject("");
+    setPdfStartPage("1");
+    setPdfNumPages("10");
+    setUploadProgress(0);
+    setUploadStatus("");
+    setQuestionsExtracted(0);
+    setShowPdfUploadModal(true);
+  };
+
+  const handleSelectPdf = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+      });
+      
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+      
+      const file = result.assets[0];
+      setPdfFile({
+        uri: file.uri,
+        name: file.name,
+        type: file.mimeType || 'application/pdf',
+      });
+      
+      // Auto-fill title from filename
+      if (!pdfTitle) {
+        const nameWithoutExt = file.name.replace(/\.pdf$/i, '');
+        setPdfTitle(nameWithoutExt);
+      }
+    } catch (e: any) {
+      Alert.alert("Error", "Failed to select file");
+    }
+  };
+
+  const handleUploadPdf = async () => {
+    if (!pdfFile) {
+      Alert.alert("Error", "Please select a PDF file");
+      return;
+    }
+    if (!pdfSubject) {
+      Alert.alert("Error", "Please select a subject");
+      return;
+    }
+
+    try {
+      setIsUploadingPdf(true);
+      setUploadProgress(0);
+      setUploadStatus("Uploading PDF file...");
+      setQuestionsExtracted(0);
+      
+      // Upload the PDF file first
+      const response = await fetch(pdfFile.uri);
+      const blob = await response.blob();
+      const uploadResult = await uploadFileDirect(blob, pdfFile.name, pdfFile.type);
+      
+      setUploadProgress(5);
+      setUploadStatus("Starting question extraction...");
+      
+      // Extract questions from PDF and create paper (streaming)
+      const startPage = parseInt(pdfStartPage, 10) || 1;
+      const numPages = parseInt(pdfNumPages, 10) || 10;
+      
+      const result = await uploadPdfToQuestionPaper(
+        {
+          fileUrl: uploadResult.publicUrl,
+          fileName: pdfFile.name,
+          title: pdfTitle.trim() || undefined,
+          subject: pdfSubject,
+          startPage,
+          numPages,
+        },
+        (event: PdfExtractionEvent) => {
+          if (event.type === "status") {
+            setUploadProgress(event.progress);
+            setUploadStatus(event.message);
+          } else if (event.type === "question_extracted") {
+            setQuestionsExtracted(event.index);
+          } else if (event.type === "page_complete") {
+            setQuestionsExtracted(event.questionsFound);
+          }
+        }
+      );
+      
+      setShowPdfUploadModal(false);
+      setPdfFile(null);
+      setPdfTitle("");
+      setPdfSubject("");
+      setUploadProgress(0);
+      setUploadStatus("");
+      setQuestionsExtracted(0);
+      
+      Alert.alert(
+        "Paper Created!",
+        `"${result.title}" has been created with ${result.questionsCount} questions extracted from the PDF.`,
+        [
+          { text: "Edit Paper", onPress: () => router.push(`/paper-editor?id=${result.paperId}` as any) },
+          { text: "OK", onPress: () => fetchPapers(false) },
+        ]
+      );
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Failed to process PDF");
+    } finally {
+      setIsUploadingPdf(false);
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -238,6 +366,9 @@ export default function PaperHistoryScreen() {
         <View style={styles.headerBtns}>
           <Pressable onPress={() => router.push("/test-sessions" as any)} style={styles.secondaryBtn}>
             <Text style={styles.secondaryBtnText}>View Tests</Text>
+          </Pressable>
+          <Pressable onPress={handleOpenPdfUploadModal} style={styles.uploadPdfBtn}>
+            <Text style={styles.uploadPdfBtnText}>Upload PDF</Text>
           </Pressable>
           <Pressable onPress={() => router.push("/paper-generator" as any)} style={styles.primaryBtn}>
             <Text style={styles.primaryBtnText}>+ New Paper</Text>
@@ -579,6 +710,146 @@ export default function PaperHistoryScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* PDF Upload Modal */}
+      <Modal
+        visible={showPdfUploadModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !isUploadingPdf && setShowPdfUploadModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Upload Question Paper PDF</Text>
+            <Text style={styles.modalSubtitle}>
+              Upload a PDF and we'll automatically extract questions with diagrams. You can edit the paper after extraction.
+            </Text>
+
+            {isUploadingPdf ? (
+              /* Progress View */
+              <View style={styles.progressContainer}>
+                <ActivityIndicator size="large" color="#2563eb" style={{ marginBottom: 16 }} />
+                <Text style={styles.progressStatus}>{uploadStatus}</Text>
+                
+                {/* Progress Bar */}
+                <View style={styles.progressBarContainer}>
+                  <View style={[styles.progressBarFill, { width: `${uploadProgress}%` }]} />
+                </View>
+                <Text style={styles.progressPercent}>{uploadProgress}%</Text>
+                
+                {questionsExtracted > 0 && (
+                  <Text style={styles.questionsFoundText}>
+                    {questionsExtracted} question{questionsExtracted !== 1 ? 's' : ''} extracted so far
+                  </Text>
+                )}
+              </View>
+            ) : (
+              /* Form View */
+              <>
+                {/* PDF File Selection */}
+                <Text style={styles.inputLabel}>PDF File *</Text>
+                <Pressable onPress={handleSelectPdf} style={styles.fileSelectBtn}>
+                  {pdfFile ? (
+                    <View style={styles.fileSelected}>
+                      <Text style={styles.fileSelectedIcon}>📄</Text>
+                      <Text style={styles.fileSelectedName} numberOfLines={1}>{pdfFile.name}</Text>
+                      <Text style={styles.fileChangeText}>Change</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.fileSelectContent}>
+                      <Text style={styles.fileSelectIcon}>📁</Text>
+                      <Text style={styles.fileSelectText}>Select PDF File</Text>
+                    </View>
+                  )}
+                </Pressable>
+
+                {/* Title (Optional) */}
+                <Text style={styles.inputLabel}>Paper Title (optional)</Text>
+                <TextInput
+                  value={pdfTitle}
+                  onChangeText={setPdfTitle}
+                  placeholder="Auto-generated from filename if empty"
+                  style={styles.modalInput}
+                />
+
+                {/* Subject */}
+                <Text style={styles.inputLabel}>Subject *</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {SUBJECTS.map((s) => (
+                      <Pressable
+                        key={s}
+                        onPress={() => setPdfSubject(s)}
+                        style={[
+                          styles.subjectChip,
+                          pdfSubject === s && styles.subjectChipActive
+                        ]}
+                      >
+                        <Text style={[
+                          styles.subjectChipText,
+                          pdfSubject === s && styles.subjectChipTextActive
+                        ]}>
+                          {s}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </ScrollView>
+
+                {/* Page Selection */}
+                <View style={{ flexDirection: "row", gap: 16, marginBottom: 16 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Start Page</Text>
+                    <TextInput
+                      value={pdfStartPage}
+                      onChangeText={setPdfStartPage}
+                      placeholder="1"
+                      placeholderTextColor="#666"
+                      style={styles.input}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Number of Pages</Text>
+                    <TextInput
+                      value={pdfNumPages}
+                      onChangeText={setPdfNumPages}
+                      placeholder="10"
+                      placeholderTextColor="#666"
+                      style={styles.input}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.inputHint}>
+                  Questions and diagrams will be automatically extracted from the PDF using AI. Processing {pdfNumPages || "10"} page(s) starting from page {pdfStartPage || "1"}.
+                </Text>
+
+                <View style={styles.modalActions}>
+                  <Pressable 
+                    onPress={() => { setShowPdfUploadModal(false); setPdfFile(null); }}
+                    style={[styles.modalBtn, styles.modalCancelBtn]}
+                  >
+                    <Text style={styles.modalCancelBtnText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable 
+                    onPress={handleUploadPdf}
+                    disabled={!pdfFile || !pdfSubject}
+                    style={[
+                      styles.modalBtn, 
+                      styles.modalPrimaryBtn, 
+                      (!pdfFile || !pdfSubject) && { opacity: 0.5 }
+                    ]}
+                  >
+                    <Text style={styles.modalPrimaryBtnText}>Extract Questions</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -730,4 +1001,47 @@ const styles = StyleSheet.create({
   modalPrimaryBtnText: { color: "#fff", fontWeight: "600" },
   modalStartBtn: { backgroundColor: "#059669" },
   modalStartBtnText: { color: "#fff", fontWeight: "600" },
+  // PDF Upload styles
+  uploadPdfBtn: { backgroundColor: "#7c3aed", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 },
+  uploadPdfBtnText: { color: "#fff", fontWeight: "600" },
+  fileSelectBtn: {
+    borderWidth: 2,
+    borderColor: "#d1d5db",
+    borderStyle: "dashed",
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 16,
+    alignItems: "center",
+    backgroundColor: "#f9fafb",
+  },
+  fileSelectContent: { alignItems: "center" },
+  fileSelectIcon: { fontSize: 32, marginBottom: 8 },
+  fileSelectText: { fontSize: 14, color: "#6b7280", fontWeight: "500" },
+  fileSelected: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+  },
+  fileSelectedIcon: { fontSize: 24, marginRight: 12 },
+  fileSelectedName: { flex: 1, fontSize: 14, color: "#111827", fontWeight: "500" },
+  fileChangeText: { fontSize: 13, color: "#2563eb", fontWeight: "600" },
+  subjectChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#f3f4f6",
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+  },
+  subjectChipActive: { backgroundColor: "#111827", borderColor: "#111827" },
+  subjectChipText: { fontSize: 13, color: "#374151", fontWeight: "500" },
+  subjectChipTextActive: { color: "#fff" },
+  inputHint: { fontSize: 12, color: "#6b7280", marginTop: -8, marginBottom: 16 },
+  // Progress styles
+  progressContainer: { alignItems: "center", paddingVertical: 20 },
+  progressStatus: { fontSize: 14, color: "#374151", marginBottom: 16, textAlign: "center" },
+  progressBarContainer: { width: "100%", height: 8, backgroundColor: "#e5e7eb", borderRadius: 4, overflow: "hidden", marginBottom: 8 },
+  progressBarFill: { height: "100%", backgroundColor: "#2563eb", borderRadius: 4 },
+  progressPercent: { fontSize: 12, color: "#6b7280", marginBottom: 12 },
+  questionsFoundText: { fontSize: 14, color: "#059669", fontWeight: "600" },
 });

@@ -364,13 +364,20 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
         "You are an expert at parsing printed exam pages. You will receive: " +
-        "(1) The EXTRACTED TEXT from the PDF's text layer - this is the EXACT, VERBATIM text as encoded in the PDF. " +
-        "(2) An IMAGE of the page - use this ONLY for understanding diagrams, figures, and their labels. " +
-        "CRITICAL: For question text and options, use the EXTRACTED TEXT verbatim. Do NOT paraphrase or modify any text. " +
-        "The image is provided only to help you understand diagrams and match them to the correct questions. " +
+        "(1) The EXTRACTED TEXT from the PDF's text layer - this may contain garbled Unicode math symbols. " +
+        "(2) An IMAGE of the page - use this to understand the ACTUAL content, especially mathematical expressions. " +
+        "CRITICAL MATH FORMATTING RULES: " +
+        "- Convert ALL mathematical expressions to proper LaTeX format wrapped in $ delimiters. " +
+        "- Examples: 'x 2 /6 + y 2 /3 = 1' should become '$\\frac{x^2}{6} + \\frac{y^2}{3} = 1$'. " +
+        "- Subscripts like 'T 1' become '$T_1$', superscripts like 'x 2' become '$x^2$'. " +
+        "- Set notation like '{0,1,2,3}' becomes '$\\{0,1,2,3\\}$'. " +
+        "- Intervals like '(0,1)' in math context become '$(0,1)$'. " +
+        "- Replace garbled symbols (≡, ∈, ⊆, →, etc) with their proper LaTeX equivalents ($\\equiv$, $\\in$, $\\subseteq$, $\\to$). " +
+        "- Greek letters should be in LaTeX: α→$\\alpha$, β→$\\beta$, θ→$\\theta$, etc. " +
+        "- USE THE IMAGE to determine the correct mathematical meaning when the extracted text is garbled. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string - copy EXACTLY from extracted text), `questionType` ('objective' or 'subjective'), " +
-        "`options` (array of strings - copy EXACTLY from extracted text, ONLY for objective questions, empty array for subjective), " +
+        "`question` (string with proper LaTeX math), `questionType` ('objective' or 'subjective'), " +
+        "`options` (array of strings with proper LaTeX math, ONLY for objective questions, empty array for subjective), " +
         "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
         "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
         "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
@@ -381,13 +388,13 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
         "Focus only on printed/typed content; ignore handwritten notes.";
 
       const extractedTextBlock = hasSelectableText
-        ? `\n\n--- EXTRACTED TEXT FROM PDF (use this VERBATIM for question text and options) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
+        ? `\n\n--- EXTRACTED TEXT FROM PDF (reference only, may have garbled math symbols) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
         : "\n\n--- No selectable text found in PDF, using OCR from image ---\n";
 
       const firstPageInstruction =
         "Extract ALL questions (both objective MCQ and subjective open-ended) from this page. " +
-        "IMPORTANT: Use the EXTRACTED TEXT below for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
-        "Use the image ONLY for diagram detection, figure labels, and bounding boxes. " +
+        "IMPORTANT: Use the IMAGE as the primary source for understanding mathematical content. The extracted text may have garbled symbols. " +
+        "Convert all mathematical expressions to proper LaTeX format (e.g., $x^2$, $\\frac{a}{b}$, $T_1$, $\\alpha$). " +
         extractedTextBlock +
         "Respond with a JSON array using this exact schema: " +
         "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
@@ -400,7 +407,7 @@ export const uploadQuestionPdf = async (req: CustomRequest, res: Response) => {
       const continuationInstruction =
         "The next page may contain the continuation of a question that started on the previous page. " +
         "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, (3) the current page image, and (4) the EXTRACTED TEXT from the current page. " +
-        "IMPORTANT: Use the EXTRACTED TEXT for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
+        "IMPORTANT: Use the IMAGE as the primary source. Convert all math to LaTeX format. The extracted text may have garbled symbols. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
         "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
@@ -754,13 +761,20 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
       const model = "google/gemini-3-pro-preview";
       const baseSystemPrompt =
         "You are an expert at parsing printed exam pages. You will receive: " +
-        "(1) The EXTRACTED TEXT from the PDF's text layer - this is the EXACT, VERBATIM text as encoded in the PDF. " +
-        "(2) An IMAGE of the page - use this ONLY for understanding diagrams, figures, and their labels. " +
-        "CRITICAL: For question text and options, use the EXTRACTED TEXT verbatim. Do NOT paraphrase or modify any text. " +
-        "The image is provided only to help you understand diagrams and match them to the correct questions. " +
+        "(1) The EXTRACTED TEXT from the PDF's text layer - this may contain garbled Unicode math symbols. " +
+        "(2) An IMAGE of the page - use this to understand the ACTUAL content, especially mathematical expressions. " +
+        "CRITICAL MATH FORMATTING RULES: " +
+        "- Convert ALL mathematical expressions to proper LaTeX format wrapped in $ delimiters. " +
+        "- Examples: 'x 2 /6 + y 2 /3 = 1' should become '$\\frac{x^2}{6} + \\frac{y^2}{3} = 1$'. " +
+        "- Subscripts like 'T 1' become '$T_1$', superscripts like 'x 2' become '$x^2$'. " +
+        "- Set notation like '{0,1,2,3}' becomes '$\\{0,1,2,3\\}$'. " +
+        "- Intervals like '(0,1)' in math context become '$(0,1)$'. " +
+        "- Replace garbled symbols (≡, ∈, ⊆, →, etc) with their proper LaTeX equivalents ($\\equiv$, $\\in$, $\\subseteq$, $\\to$). " +
+        "- Greek letters should be in LaTeX: α→$\\alpha$, β→$\\beta$, θ→$\\theta$, etc. " +
+        "- USE THE IMAGE to determine the correct mathematical meaning when the extracted text is garbled. " +
         "Return ONLY strict JSON (no prose). For each question, include: " +
-        "`question` (string - copy EXACTLY from extracted text), `questionType` ('objective' or 'subjective'), " +
-        "`options` (array of strings - copy EXACTLY from extracted text, ONLY for objective questions, empty array for subjective), " +
+        "`question` (string with proper LaTeX math), `questionType` ('objective' or 'subjective'), " +
+        "`options` (array of strings with proper LaTeX math, ONLY for objective questions, empty array for subjective), " +
         "and, if clearly present for objective questions, `correctOption` (string matching one of the options). " +
         "SUBJECTIVE questions are: essay questions, short-answer questions, numerical problems without options, derivations, proofs, 'explain' questions, 'describe' questions, etc. " +
         "OBJECTIVE questions are: MCQs with A/B/C/D options, true/false, match the following with options. " +
@@ -771,13 +785,13 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
         "Focus only on printed/typed content; ignore handwritten notes.";
 
       const extractedTextBlock = hasSelectableText
-        ? `\n\n--- EXTRACTED TEXT FROM PDF (use this VERBATIM for question text and options) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
+        ? `\n\n--- EXTRACTED TEXT FROM PDF (reference only, may have garbled math symbols) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
         : "\n\n--- No selectable text found in PDF, using OCR from image ---\n";
 
       const firstPageInstruction =
         "Extract ALL questions (both objective MCQ and subjective open-ended) from this page. " +
-        "IMPORTANT: Use the EXTRACTED TEXT below for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
-        "Use the image ONLY for diagram detection, figure labels, and bounding boxes. " +
+        "IMPORTANT: Use the IMAGE as the primary source for understanding mathematical content. The extracted text may have garbled symbols. " +
+        "Convert all mathematical expressions to proper LaTeX format (e.g., $x^2$, $\\frac{a}{b}$, $T_1$, $\\alpha$). " +
         extractedTextBlock +
         "Respond with a JSON array using this exact schema: " +
         "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
@@ -790,7 +804,7 @@ export const uploadQuestionPdfStream = async (req: CustomRequest, res: Response)
       const continuationInstruction =
         "The next page may contain the continuation of a question that started on the previous page. " +
         "You are given: (1) the previous page image, (2) the JSON extracted from the previous page, (3) the current page image, and (4) the EXTRACTED TEXT from the current page. " +
-        "IMPORTANT: Use the EXTRACTED TEXT for exact wording - copy text WORD-FOR-WORD, do NOT paraphrase. " +
+        "IMPORTANT: Use the IMAGE as the primary source. Convert all math to LaTeX format. The extracted text may have garbled symbols. " +
         "Using these, return ONLY the questions that are NEW on the current page or that CONTINUE from the previous page but were incomplete there. " +
         "Include both objective (MCQ) and subjective (open-ended) questions. " +
         "Do NOT duplicate any question that is already fully captured in the previous JSON. " +
@@ -3284,6 +3298,352 @@ export const createQuestionPaper = async (req: CustomRequest, res: Response) => 
   }
 };
 
+// Extract questions from PDF and create a question paper (streaming)
+export const uploadPdfToQuestionPaper = async (req: CustomRequest, res: Response) => {
+  // Set up SSE headers for streaming progress
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  
+  res.flushHeaders();
+
+  const sendEvent = (event: string, data: any) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (typeof (res as any).flush === "function") {
+      (res as any).flush();
+    }
+  };
+
+  try {
+    const { fileUrl, fileName, title, subject, startPage, numPages } = (req.body || {}) as {
+      fileUrl?: string;
+      fileName?: string;
+      title?: string;
+      subject?: string;
+      startPage?: string | number;
+      numPages?: string | number;
+    };
+
+    if (!fileUrl || typeof fileUrl !== "string") {
+      sendEvent("error", { message: "fileUrl is required" });
+      res.end();
+      return;
+    }
+
+    if (!subject || typeof subject !== "string") {
+      sendEvent("error", { message: "subject is required" });
+      res.end();
+      return;
+    }
+
+    const currentUser = req.user;
+    if (!currentUser?._id) {
+      sendEvent("error", { message: "Unauthorized" });
+      res.end();
+      return;
+    }
+
+    const userId = String(currentUser._id);
+    const role = String(currentUser.role || "");
+    
+    const startPageNum = Math.max(parseInt(String(startPage ?? "1"), 10) || 1, 1);
+    const numPagesNum = Math.max(parseInt(String(numPages ?? "100"), 10) || 100, 1);
+
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    if (!openrouterApiKey) {
+      sendEvent("error", { message: "OPENROUTER_API_KEY not configured" });
+      res.end();
+      return;
+    }
+
+    sendEvent("status", { message: "Downloading PDF...", progress: 5 });
+
+    // Download the PDF from R2 and load via pdfjs
+    const pdfResp = await axios.get<ArrayBuffer>(fileUrl, { responseType: "arraybuffer" });
+    const pdfData = new Uint8Array(pdfResp.data as any);
+    const loadingTask = getDocument({ data: pdfData, disableFontFace: true, isEvalSupported: false });
+    const pdf = await loadingTask.promise;
+    const totalPages = pdf.numPages;
+
+    const start = Math.min(startPageNum, totalPages);
+    const end = Math.min(start + numPagesNum - 1, totalPages);
+    const pagesToProcess = end - start + 1;
+
+    sendEvent("status", { message: `Processing ${pagesToProcess} pages...`, progress: 10, totalPages: pagesToProcess });
+
+    type ExtractedQuestion = {
+      question: string;
+      questionType: "objective" | "subjective";
+      options: string[];
+      correctOption?: string;
+      image?: string | null;
+    };
+
+    const extractedQuestions: ExtractedQuestion[] = [];
+    const seenQuestions = new Set<string>();
+    let previousPageDataUrl: string | null = null;
+    let previousPageExtraction: any[] = [];
+
+    for (let pageNum = start; pageNum <= end; pageNum++) {
+      const pageProgress = 10 + Math.floor(((pageNum - start) / pagesToProcess) * 80);
+      sendEvent("status", { message: `Processing page ${pageNum - start + 1} of ${pagesToProcess}...`, progress: pageProgress, currentPage: pageNum - start + 1 });
+
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      // @ts-ignore
+      const context = canvas.getContext("2d");
+
+      await page.render({ canvasContext: context, viewport }).promise;
+      const pngBuffer = canvas.toBuffer("image/png");
+      const base64Image = pngBuffer.toString("base64");
+      const dataUrl = `data:image/png;base64,${base64Image}`;
+
+      // Extract text layer from PDF
+      const textContent = await page.getTextContent();
+      const textItems = textContent.items as Array<{ str: string; transform?: number[] }>;
+
+      const sortedItems = textItems
+        .filter((item) => item.str && item.str.trim())
+        .map((item) => ({
+          str: item.str,
+          x: item.transform?.[4] ?? 0,
+          y: item.transform?.[5] ?? 0,
+        }))
+        .sort((a, b) => {
+          const yDiff = b.y - a.y;
+          if (Math.abs(yDiff) > 5) return yDiff;
+          return a.x - b.x;
+        });
+
+      let extractedText = "";
+      let lastY: number | null = null;
+      for (const item of sortedItems) {
+        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+          extractedText += "\n";
+        } else if (extractedText && !extractedText.endsWith(" ") && !extractedText.endsWith("\n")) {
+          extractedText += " ";
+        }
+        extractedText += item.str;
+        lastY = item.y;
+      }
+
+      const hasSelectableText = extractedText.trim().length > 50;
+
+      // Build AI prompt
+      const baseSystemPrompt =
+        "You are an expert at extracting questions from educational documents. " +
+        "CRITICAL MATH FORMATTING: Convert ALL mathematical expressions to proper LaTeX format wrapped in $ delimiters. " +
+        "Examples: 'x 2' → '$x^2$', 'T 1' → '$T_1$', fractions like 'x/y' → '$\\frac{x}{y}$'. " +
+        "Replace garbled Unicode symbols (≡, ∈, ⊆, →) with LaTeX equivalents. " +
+        "Greek letters: α→$\\alpha$, β→$\\beta$, θ→$\\theta$. " +
+        "Use the IMAGE to understand actual mathematical content when text is garbled. " +
+        "Focus only on printed/typed content; ignore handwritten notes.";
+
+      const extractedTextBlock = hasSelectableText
+        ? `\n\n--- EXTRACTED TEXT FROM PDF (reference only, may have garbled math symbols) ---\n${extractedText}\n--- END EXTRACTED TEXT ---\n`
+        : "\n\n--- No selectable text found in PDF, using OCR from image ---\n";
+
+      const isFirstPage = pageNum === start;
+      const instruction = isFirstPage
+        ? "Extract ALL questions (both objective MCQ and subjective open-ended) from this page. " +
+          "IMPORTANT: Use the IMAGE as the primary source for mathematical content. Convert all math to LaTeX format. " +
+          extractedTextBlock +
+          "Respond with a JSON array using this exact schema: " +
+          "[{ \"question\": string, \"questionType\": \"objective\" | \"subjective\", \"options\": string[], \"correctOption\"?: string, \"hasDiagram\": boolean, " +
+          "\"diagramBox\"?: { \"x\": number, \"y\": number, \"width\": number, \"height\": number } }]. " +
+          "For subjective questions (essay, short-answer, numerical without options), set questionType to 'subjective' and options to empty array []. " +
+          "For objective questions (MCQ with options), set questionType to 'objective' and include all options. " +
+          "Do not include any text outside the JSON. If no questions found, return []. " +
+          "When a diagram is present, provide a precise `diagramBox` around the diagram only."
+        : "Continue extracting questions from this page. Check if the first content continues a question from the previous page. " +
+          "Convert all math to LaTeX format. " +
+          extractedTextBlock +
+          "Return JSON array with same schema. If content continues from previous page, include the full merged question.";
+
+      const messages: any[] = [{ role: "system", content: baseSystemPrompt }];
+
+      // Include previous page for context
+      if (previousPageDataUrl && previousPageExtraction.length > 0) {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: "Previous page for context (last question may continue):" },
+            { type: "image_url", image_url: { url: previousPageDataUrl } },
+          ],
+        });
+        messages.push({
+          role: "assistant",
+          content: JSON.stringify(previousPageExtraction),
+        });
+      }
+
+      messages.push({
+        role: "user",
+        content: [
+          { type: "text", text: instruction },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      });
+
+      // Call AI for extraction
+      const aiResp = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model: "google/gemini-2.0-flash-001",
+          messages,
+          temperature: 0.1,
+          max_tokens: 8000,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${openrouterApiKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const content = aiResp.data?.choices?.[0]?.message?.content || "";
+      let extracted: any[] = [];
+      try {
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          extracted = JSON.parse(jsonMatch[0]);
+        }
+      } catch (parseErr) {
+        console.error("Failed to parse AI response:", parseErr);
+      }
+
+      // Process extracted questions
+      for (const item of extracted) {
+        let diagramUrl: string | null = null;
+        if (item?.hasDiagram && item?.diagramBox && typeof item.diagramBox === "object") {
+          const rel = item.diagramBox || {};
+          const cw = canvas.width;
+          const ch = canvas.height;
+          const rx = Math.max(0, Math.min(1, Number(rel.x)));
+          const ry = Math.max(0, Math.min(1, Number(rel.y)));
+          const rw = Math.max(0, Math.min(1, Number(rel.width)));
+          const rh = Math.max(0, Math.min(1, Number(rel.height)));
+          let sx = Math.floor(rx * cw);
+          let sy = Math.floor(ry * ch);
+          let sw = Math.floor(rw * cw);
+          let sh = Math.floor(rh * ch);
+          const pad = 8;
+          sx = Math.max(0, sx - pad);
+          sy = Math.max(0, sy - pad);
+          sw = Math.min(cw - sx, sw + 2 * pad);
+          sh = Math.min(ch - sy, sh + 2 * pad);
+          if (sw > 5 && sh > 5) {
+            const crop = createCanvas(sw, sh);
+            // @ts-ignore
+            const cropCtx = crop.getContext("2d");
+            // @ts-ignore
+            cropCtx.drawImage(canvas as any, sx, sy, sw, sh, 0, 0, sw, sh);
+            const cropBuffer = crop.toBuffer("image/png");
+            try {
+              const uploaded = await uploadBufferToR2(cropBuffer, "image/png", `diagram_page_${pageNum}.png`, role, userId, true);
+              diagramUrl = uploaded.publicUrl;
+            } catch (e) {
+              console.error("Failed to upload diagram image to R2", e);
+            }
+          }
+        }
+
+        const questionText = String(item?.question || "").trim();
+        const options: string[] = Array.isArray(item?.options) ? item.options.map((o: any) => String(o)) : [];
+        const questionType: "objective" | "subjective" = 
+          item?.questionType === "subjective" || (options.length === 0) ? "subjective" : "objective";
+
+        const isValidQuestion = questionText && 
+          ((questionType === "objective" && options.length > 0) || questionType === "subjective");
+
+        if (isValidQuestion && !seenQuestions.has(questionText)) {
+          seenQuestions.add(questionText);
+
+          let correctIndex: number | undefined;
+          if (questionType === "objective" && item?.correctOption) {
+            const correctText = String(item.correctOption);
+            const foundIdx = options.findIndex((o) => o.trim() === correctText.trim());
+            if (foundIdx >= 0) correctIndex = foundIdx;
+          }
+
+          extractedQuestions.push({
+            question: questionText,
+            questionType,
+            options,
+            correctOption: item?.correctOption,
+            image: diagramUrl,
+          });
+
+          sendEvent("question_extracted", { 
+            index: extractedQuestions.length, 
+            question: questionText.substring(0, 100) + (questionText.length > 100 ? "..." : ""),
+            questionType,
+            hasImage: !!diagramUrl
+          });
+        }
+      }
+
+      sendEvent("page_complete", { page: pageNum - start + 1, totalPages: pagesToProcess, questionsFound: extractedQuestions.length });
+
+      previousPageDataUrl = dataUrl;
+      previousPageExtraction = extracted;
+    }
+
+    if (extractedQuestions.length === 0) {
+      sendEvent("error", { message: "No questions could be extracted from the PDF" });
+      res.end();
+      return;
+    }
+
+    sendEvent("status", { message: "Creating question paper...", progress: 95 });
+
+    // Create the question paper with extracted questions
+    const paperTitle = title || fileName?.replace(/\.pdf$/i, '') || `${subject} Paper - ${new Date().toLocaleDateString()}`;
+    
+    // Determine paper type based on extracted questions
+    const hasObjective = extractedQuestions.some(q => q.questionType === "objective");
+    const paperType = hasObjective ? "objective" : "subjective";
+
+    const paper = await QuestionPaper.create({
+      title: String(paperTitle).trim(),
+      subject: String(subject).trim(),
+      paperType,
+      questions: extractedQuestions.map((q, idx) => ({
+        text: q.question,
+        options: q.options,
+        correctIndex: q.correctOption ? q.options.findIndex((o) => o.trim() === String(q.correctOption).trim()) : undefined,
+        image: q.image || undefined,
+        questionType: q.questionType,
+        subject: subject,
+        difficulty: "medium", // Default
+        topics: [],
+        tags: [],
+      })),
+      status: "draft",
+      createdBy: currentUser._id,
+    });
+
+    sendEvent("complete", {
+      success: true,
+      paperId: paper._id,
+      title: paper.title,
+      subject: paper.subject,
+      questionsCount: extractedQuestions.length,
+      message: `Successfully extracted ${extractedQuestions.length} questions and created paper`,
+    });
+    res.end();
+
+  } catch (error) {
+    console.error("Error extracting PDF to question paper:", error);
+    sendEvent("error", { message: "Processing failed", details: error instanceof Error ? error.message : "Unknown error" });
+    res.end();
+  }
+};
+
 export const listQuestionPapers = async (req: CustomRequest, res: Response) => {
   try {
     const userId = req.user?._id;
@@ -3483,18 +3843,23 @@ export const updateQuestionInPaper = async (req: CustomRequest, res: Response) =
     }
 
     // Update question fields
-    if (text !== undefined) paper.questions[questionIndex].text = String(text).trim();
+    const question = paper.questions[questionIndex];
+    if (!question) {
+      res.status(404).json({ success: false, message: "Question not found at index" });
+      return;
+    }
+    if (text !== undefined) question.text = String(text).trim();
     if (options !== undefined && Array.isArray(options)) {
-      paper.questions[questionIndex].options = options.map((o: any) => String(o));
+      question.options = options.map((o: any) => String(o));
     }
     if (correctIndex !== undefined) {
-      paper.questions[questionIndex].correctIndex = typeof correctIndex === "number" ? correctIndex : undefined;
+      question.correctIndex = typeof correctIndex === "number" ? correctIndex : undefined;
     }
-    if (image !== undefined) paper.questions[questionIndex].image = image || undefined;
-    if (chapter !== undefined) paper.questions[questionIndex].chapter = chapter || undefined;
-    if (difficulty !== undefined) paper.questions[questionIndex].difficulty = difficulty || undefined;
-    if (topics !== undefined) paper.questions[questionIndex].topics = Array.isArray(topics) ? topics : [];
-    if (tags !== undefined) paper.questions[questionIndex].tags = Array.isArray(tags) ? tags : [];
+    if (image !== undefined) question.image = image || undefined;
+    if (chapter !== undefined) question.chapter = chapter || undefined;
+    if (difficulty !== undefined) question.difficulty = difficulty || undefined;
+    if (topics !== undefined) question.topics = Array.isArray(topics) ? topics : [];
+    if (tags !== undefined) question.tags = Array.isArray(tags) ? tags : [];
 
     paper.updatedAt = new Date();
     await paper.save();
