@@ -126,8 +126,8 @@ function App() {
             
             {/* Auth Buttons */}
             <div className="auth-buttons">
-              <button className="btn btn-outline">Log in</button>
-              <button className="btn btn-primary">Sign up</button>
+              <a href="https://app.parikshalab.com" className="btn btn-outline">Log in</a>
+              <a href="https://app.parikshalab.com" className="btn btn-primary">Sign up</a>
             </div>
             
             {/* Mobile Menu Button */}
@@ -153,9 +153,9 @@ function App() {
                 Upload question banks, generate tests, and receive detailed performance reports.
               </p>
               <div className="hero-buttons">
-                <button className="btn btn-primary btn-large btn-shadow">
+                <a href="https://app.parikshalab.com" className="btn btn-primary btn-large btn-shadow">
                   Get Started
-                </button>
+                </a>
                 <button className="btn btn-secondary btn-large">
                   Watch Demo
                 </button>
@@ -327,9 +327,9 @@ function App() {
               Join thousands of educators who are already using ParikshaLab to create better assessments.
             </p>
             <div className="cta-buttons">
-              <button className="btn btn-primary btn-large btn-shadow">
+              <a href="https://app.parikshalab.com" className="btn btn-primary btn-large btn-shadow">
                 Start Free Trial
-              </button>
+              </a>
               <button className="btn-cta-outline">
                 Contact Sales
               </button>
