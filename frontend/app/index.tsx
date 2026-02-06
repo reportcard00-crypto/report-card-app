@@ -54,15 +54,21 @@ const Index = () => {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+    
     const checkAuth = async () => {
       try {
         const response = await apiClient.get("/api/user/user");
+        if (!isMounted) return;
+        
         if (response.data) {
           setUser(response.data as AuthUser);
         }
         // Fetch profile status after user
         try {
           const profileRes = await apiClient.get<ProfileStatusResponse>("/api/user/profile-status");
+          if (!isMounted) return;
+          
           if (profileRes?.data?.success) {
             setProfileStatus(profileRes.data);
             if (!profileRes.data.hasProfile) {
@@ -75,15 +81,24 @@ const Index = () => {
             }
           }
         } catch {}
+        
+        if (!isMounted) return;
         setLoading(false);
         // Fetch active tests and dashboard once authenticated
         fetchActiveTests(true);
         fetchDashboard();
-      } catch {
+      } catch (error) {
+        console.log("Auth check failed:", error);
+        if (!isMounted) return;
+        setLoading(false);
         router.replace("/auth/Auth");
       }
     };
     checkAuth();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [router, setUser, setProfileStatus, fetchActiveTests, fetchDashboard]);
 
   // Poll for active tests every 5 seconds
