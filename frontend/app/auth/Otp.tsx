@@ -23,6 +23,7 @@ export default function Otp() {
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(30);
   const phone = useAuthStore((s) => s.phone);
+  const selectedRole = useAuthStore((s) => s.selectedRole);
   const setUser = useAuthStore((s) => s.setUser);
 
   useEffect(() => {
@@ -52,6 +53,10 @@ export default function Otp() {
         if (response?.data.user) {
           setUser(response.data.user as AuthUser);
         }
+        // Store role in secure store for persistence
+        // Use role from response (top-level), fallback to selected role, then default to "student"
+        const userRole = response?.data.role || response?.data.user?.role || selectedRole || "student";
+        await store.set("role", userRole);
         router.replace("/");
       } else {
         Alert.alert("Error", response?.data.message || "Verification failed");
@@ -122,7 +127,7 @@ export default function Otp() {
         </TouchableOpacity>
 
         <View style={styles.resendRow}>
-          <Text style={styles.resendText}>Didn’t receive the code?</Text>
+          <Text style={styles.resendText}>Didn't receive the code?</Text>
           <TouchableOpacity
             onPress={handleResend}
             disabled={resending || cooldown > 0}
@@ -221,5 +226,3 @@ const styles = StyleSheet.create({
     color: "#93c5fd",
   },
 });
-
-

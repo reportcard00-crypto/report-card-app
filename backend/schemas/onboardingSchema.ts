@@ -2,6 +2,7 @@ import z from "zod";
 
 export const onboardingSchema = z.object({
     phone: z.string().min(10, "Phone number must be at least 10 characters long"),
+    role: z.enum(["student", "teacher"]).optional(),
 });
 export const verifyOtpSchema = z.object({
     phone: z.string().min(10, "Phone number must be at least 10 characters long"),

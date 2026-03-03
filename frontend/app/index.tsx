@@ -1,16 +1,16 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { 
-  View, 
-  Text, 
-  ActivityIndicator, 
-  StyleSheet, 
-  Pressable, 
-  ScrollView, 
+import {
+  View,
+  Text,
+  ActivityIndicator,
+  StyleSheet,
+  Pressable,
+  ScrollView,
   RefreshControl,
 } from "react-native";
 import { useRouter } from "expo-router";
-import apiClient, { 
-  getActiveTests, 
+import apiClient, {
+  getActiveTests,
   getStudentDashboard,
   type ActiveTest,
   type StudentDashboardData,
@@ -77,6 +77,13 @@ const Index = () => {
               } else {
                 router.replace("/auth/InitialProfile");
               }
+              return;
+            }
+            // Route teachers to teacher dashboard
+            if (profileRes.data.role === "teacher" || profileRes.data.profileType === "teacher") {
+              if (!isMounted) return;
+              setLoading(false);
+              router.replace("/teacher" as any);
               return;
             }
           }

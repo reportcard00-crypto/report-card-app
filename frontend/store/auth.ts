@@ -12,6 +12,7 @@ export type AuthState = {
   user: AuthUser | null;
   phone: string | null;
   userId: string | null;
+  selectedRole: "student" | "teacher" | null;
   profileStatus: {
     hasProfile: boolean;
     role?: string;
@@ -21,6 +22,7 @@ export type AuthState = {
   setUser: (user: AuthUser | null) => void;
   setPhone: (phone: string | null) => void;
   setUserId: (userId: string | null) => void;
+  setSelectedRole: (role: "student" | "teacher" | null) => void;
   setProfileStatus: (status: AuthState["profileStatus"]) => void;
   clearUser: () => void;
 };
@@ -29,12 +31,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   phone: null,
   userId: null,
+  selectedRole: null,
   profileStatus: null,
   setUser: (user) => set({ user }),
   setPhone: (phone) => set({ phone }),
   setUserId: (userId) => set({ userId }),
+  setSelectedRole: (selectedRole) => set({ selectedRole }),
   setProfileStatus: (profileStatus) => set({ profileStatus }),
-  clearUser: () => set({ user: null, phone: null, userId: null }),
+  clearUser: () => set({ user: null, phone: null, userId: null, selectedRole: null }),
 }));
-
-

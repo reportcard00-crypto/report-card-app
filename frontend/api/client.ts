@@ -289,3 +289,387 @@ export async function getTestDetail(testId: string) {
   const resp = await apiClient.get(`/api/tests/student/${testId}/detail`);
   return resp.data as { success: boolean; data: TestDetailData };
 }
+
+// ============================================================
+// Teacher API Types and Functions
+// ============================================================
+
+export type ClassroomTeacher = {
+  _id: string;
+  name?: string;
+  phone: string;
+};
+
+export type ClassroomStudent = {
+  _id: string;
+  name?: string;
+  phone: string;
+  createdAt?: string;
+};
+
+export type ClassroomListItem = {
+  _id: string;
+  name: string;
+  description?: string;
+  teacher: ClassroomTeacher;
+  studentsCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Classroom = {
+  _id: string;
+  name: string;
+  description?: string;
+  teacher: ClassroomTeacher;
+  students: ClassroomStudent[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QuestionPaperListItem = {
+  _id: string;
+  title: string;
+  description?: string;
+  subject: string;
+  chapter?: string | null;
+  status: "draft" | "finalized" | "archived";
+  questionsCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TestSessionListItem = {
+  _id: string;
+  title: string;
+  status: "assigned" | "active" | "completed" | "cancelled";
+  timeLimitMinutes: number;
+  startedAt?: string;
+  endsAt?: string;
+  questionPaper: {
+    _id: string;
+    title: string;
+    subject: string;
+    questionsCount?: number;
+  };
+  classroom: {
+    _id: string;
+    name: string;
+    studentsCount?: number;
+  };
+  createdBy: {
+    _id: string;
+    name?: string;
+    phone: string;
+  };
+  totalStudents: number;
+  completedCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TestResultStudent = {
+  _id: string;
+  student: {
+    _id: string;
+    name?: string;
+    phone: string;
+  };
+  score: number;
+  correctAnswers: number;
+  wrongAnswers: number;
+  totalQuestions: number;
+  attemptedQuestions: number;
+  status: "not_started" | "in_progress" | "submitted" | "timed_out";
+  startedAt?: string;
+  submittedAt?: string;
+  totalTimeTaken: number;
+};
+
+export type TestResultsData = {
+  testSession: any;
+  results: TestResultStudent[];
+  stats: {
+    totalStudents: number;
+    participated: number;
+    completed: number;
+    inProgress: number;
+    averageScore: number;
+    highestScore: number;
+    lowestScore: number;
+  };
+};
+
+// Classroom API functions
+export async function createClassroom(params: { name: string; description?: string }) {
+  const resp = await apiClient.post(`/api/classrooms`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name: string;
+      description?: string;
+      studentsCount: number;
+      createdAt: string;
+    };
+  };
+}
+
+export async function listClassrooms(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+} = {}) {
+  const resp = await apiClient.get(`/api/classrooms`, { params });
+  return resp.data as {
+    success: boolean;
+    data: ClassroomListItem[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  };
+}
+
+export async function getClassroom(classroomId: string) {
+  const resp = await apiClient.get(`/api/classrooms/${classroomId}`);
+  return resp.data as { success: boolean; data: Classroom };
+}
+
+export async function updateClassroom(classroomId: string, params: {
+  name?: string;
+  description?: string | null;
+}) {
+  const resp = await apiClient.put(`/api/classrooms/${classroomId}`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name: string;
+      description?: string;
+      studentsCount: number;
+      updatedAt: string;
+    };
+  };
+}
+
+export async function deleteClassroom(classroomId: string) {
+  const resp = await apiClient.delete(`/api/classrooms/${classroomId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+export async function searchUsersForClassroom(query: string, limit: number = 10) {
+  const resp = await apiClient.get(`/api/classrooms/users/search`, {
+    params: { q: query, limit }
+  });
+  return resp.data as {
+    success: boolean;
+    data: Array<{
+      _id: string;
+      name?: string;
+      phone: string;
+      createdAt?: string;
+    }>;
+  };
+}
+
+export async function addStudentToClassroom(
+  classroomId: string,
+  params: { userId?: string; phone?: string; name?: string }
+) {
+  const resp = await apiClient.post(`/api/classrooms/${classroomId}/students`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      name?: string;
+      phone: string;
+    };
+    studentsCount: number;
+    message: string;
+  };
+}
+
+export async function removeStudentFromClassroom(classroomId: string, userId: string) {
+  const resp = await apiClient.delete(`/api/classrooms/${classroomId}/students/${userId}`);
+  return resp.data as { success: boolean; message: string; studentsCount: number };
+}
+
+// Question Paper API functions
+export async function listQuestionPapers(params: {
+  page?: number;
+  limit?: number;
+  subject?: string;
+  status?: string;
+  search?: string;
+} = {}) {
+  const resp = await apiClient.get(`/api/admin/papers`, { params });
+  return resp.data as {
+    success: boolean;
+    data: QuestionPaperListItem[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  };
+}
+
+export async function deleteQuestionPaper(paperId: string) {
+  const resp = await apiClient.delete(`/api/admin/papers/${paperId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Test Session API functions
+export async function assignPaperToClassroom(params: {
+  paperId: string;
+  classroomId: string;
+  title?: string;
+}) {
+  const resp = await apiClient.post(`/api/tests/assign`, params);
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      title: string;
+      status: string;
+      classroom: string;
+      paper: string;
+      createdAt: string;
+    };
+    message: string;
+  };
+}
+
+export async function listTestSessions(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  classroomId?: string;
+} = {}) {
+  const resp = await apiClient.get(`/api/tests/sessions`, { params });
+  return resp.data as {
+    success: boolean;
+    data: TestSessionListItem[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  };
+}
+
+export async function startTest(testId: string, timeLimitMinutes: number) {
+  const resp = await apiClient.post(`/api/tests/sessions/${testId}/start`, { timeLimitMinutes });
+  return resp.data as {
+    success: boolean;
+    data: {
+      _id: string;
+      status: string;
+      timeLimitMinutes: number;
+      startedAt: string;
+      endsAt: string;
+    };
+    message: string;
+  };
+}
+
+export async function stopTest(testId: string) {
+  const resp = await apiClient.post(`/api/tests/sessions/${testId}/stop`);
+  return resp.data as { success: boolean; message: string };
+}
+
+export async function getTestResults(testId: string) {
+  const resp = await apiClient.get(`/api/tests/sessions/${testId}/results`);
+  return resp.data as { success: boolean; data: TestResultsData };
+}
+
+export async function deleteTestSession(testId: string) {
+  const resp = await apiClient.delete(`/api/tests/sessions/${testId}`);
+  return resp.data as { success: boolean; message: string };
+}
+
+// Upload PDF and extract questions to create a question paper (streaming)
+export async function uploadPdfToQuestionPaper(
+  params: {
+    fileUrl: string;
+    fileName: string;
+    title?: string;
+    subject: string;
+    startPage?: number;
+    numPages?: number;
+  },
+  onProgress: (event: { type: string; [key: string]: any }) => void
+): Promise<{ paperId: string; title: string; questionsCount: number }> {
+  const token = await store.get("token");
+
+  return new Promise((resolve, reject) => {
+    fetch(`${baseUrl}/api/admin/papers/upload-pdf`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: JSON.stringify(params),
+    }).then(async response => {
+      if (!response.ok) {
+        const errorText = await response.text();
+        reject(new Error(errorText || 'Failed to start PDF extraction'));
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        reject(new Error('No response body'));
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let currentEvent = '';
+        let currentData = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            currentData = line.slice(6);
+
+            if (currentEvent && currentData) {
+              try {
+                const data = JSON.parse(currentData);
+                onProgress({ type: currentEvent, ...data });
+
+                if (currentEvent === 'complete') {
+                  resolve({
+                    paperId: data.paperId,
+                    title: data.title,
+                    questionsCount: data.questionsCount,
+                  });
+                } else if (currentEvent === 'error') {
+                  reject(new Error(data.message || 'Extraction failed'));
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', e);
+              }
+
+              currentEvent = '';
+              currentData = '';
+            }
+          }
+        }
+      }
+    }).catch(reject);
+  });
+}
+
+// Upload file directly (base64)
+export async function uploadFileDirect(params: { dataBase64: string; fileType?: string; fileName?: string; isPermanent?: boolean }) {
+  const resp = await apiClient.post(`/api/file/upload-direct`, {
+    fileType: params.fileType ?? "application/pdf",
+    fileName: params.fileName ?? "question.pdf",
+    dataBase64: params.dataBase64,
+    isPermanent: params.isPermanent ?? true,
+  });
+  return resp.data as { publicUrl: string };
+}

@@ -10,10 +10,12 @@ import ROLES from "../types/roles";
 
 export const onboarding = async (req: Request, res: Response) => {
   try {
-    const { phone } = onboardingSchema.parse(req.body);
+    const { phone, role } = onboardingSchema.parse(req.body);
     const user = await User.findOne({ phone: phone });
     if (!user) {
-      const newUser = await User.create({ phone: phone });
+      // Map frontend role to backend role
+      const userRole = role === "teacher" ? ROLES.TEACHER : ROLES.USER;
+      const newUser = await User.create({ phone: phone, role: userRole });
       const otp = generateOTP();
       await sendPhoneOtp(phone, otp);
       await newUser.updateOne({

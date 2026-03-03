@@ -73,7 +73,7 @@ export default function TeacherProfile() {
           setUser({ ...user, name } as AuthUser);
         }
         Alert.alert("Saved", "Teacher profile saved successfully.");
-        router.replace("/");
+        router.replace("/teacher" as any);
       } else {
         Alert.alert("Error", response?.data?.message || "Failed to save profile");
       }
